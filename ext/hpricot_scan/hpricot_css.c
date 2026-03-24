@@ -14,7 +14,7 @@
   fargs = 1
 #define FILTERAUTO() \
   char filt[10]; \
-  sprintf(filt, "%.*s", te - ts, ts); \
+  sprintf(filt, "%.*s", (int)(te - ts), ts); \
   rb_funcall2(mod, rb_intern(filt), fargs, fvals); \
   rb_ary_clear(tmpt); \
   fargs = 1
@@ -39,7 +39,7 @@ static const int hpricot_css_en_main = 87;
 
 VALUE hpricot_css(VALUE self, VALUE mod, VALUE str, VALUE node)
 {
-  int cs, act, eof;
+  int cs, act, eof = 0;
   char *p, *pe, *ts, *te, *aps, *ape, *aps2, *ape2;
 
   int fargs = 1;

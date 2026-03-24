@@ -1,9 +1,9 @@
 Gem::Specification.new do |s|
   s.name = %q{webtranslateit-hpricot}
-  s.version = "0.9.0"
+  s.version = "0.10.0"
 
   s.authors = ["why the lucky stiff"]
-  s.date = %q{2012-01-17}
+  s.date = %q{2024-03-24}
   s.description = %q{a swift, liberal HTML parser with a fantastic library}
   s.email = %q{why@ruby-lang.org}
   s.license = "MIT"

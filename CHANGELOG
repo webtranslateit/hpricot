@@ -1,3 +1,11 @@
+= 0.10.0
+=== 24 March 2026
+* Fix compilation with Ruby 4.
+* Use HTTPS source in Gemfile (HTTP disallowed by Bundler)
+* Fix incompatible function pointer types for ref_func/set_func arrays
+* Remove deprecated OBJ_TAINT/OBJ_TAINTED calls (removed in Ruby 3.2+)
+* Fix format string precision type and uninitialized variable in hpricot_css
+
 = 0.9.0
 === 23 April 2024
 * Fix issue compiling with clang 16.

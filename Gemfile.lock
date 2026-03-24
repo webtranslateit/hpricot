@@ -1,5 +1,5 @@
 GEM
-  remote: http://rubygems.org/
+  remote: https://rubygems.org/
   specs:
     rake (0.9.2.2)
     rake-compiler (0.7.9)
@@ -15,3 +15,6 @@ DEPENDENCIES
   rake
   rake-compiler
   rdoc
+
+BUNDLED WITH
+  4.0.7
