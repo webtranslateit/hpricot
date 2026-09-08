@@ -18,22 +18,9 @@ module Hpricot
   #   * Attribute values are stored undecoded.
   class Scanner
     def initialize(source, xml: false, fixup_tags: false, xhtml_strict: false)
-      @src = source
       @xml = xml
       @fixup_tags = fixup_tags
       @xhtml_strict = xhtml_strict
-      # StringScanner matches against @scan_src using regexes tied to ITS
-      # encoding. Documents with an invalid byte sequence for their tagged
-      # encoding (common with mislabelled Latin-1/CP-1252 HTML) would make
-      # ordinary regex matching raise ArgumentError, which the C scanner --
-      # a byte-oriented ragel machine with no concept of encoding -- never
-      # did. So all matching happens against a binary (ASCII-8BIT) view;
-      # every substring that becomes visible token data (raw spans, text,
-      # comment/CDATA content, tag/attribute names and values) is instead
-      # re-sliced from @src by byte offset, via `span` or `String#byteslice`,
-      # so it keeps @src's own encoding rather than being forced binary.
-      @scan_src = source.dup.force_encoding(Encoding::ASCII_8BIT)
-      @ss = StringScanner.new(@scan_src)
 
       # Which encoding the token strings carry.
       #
@@ -54,7 +41,30 @@ module Hpricot
         else
           source.encoding
         end
-      @src = @src.dup.force_encoding(@out_encoding) if @src.encoding != @out_encoding
+
+      # What the regexes run against.
+      #
+      # Matching has to tolerate bytes that are invalid for the source's
+      # declared encoding -- mislabelled Latin-1/CP-1252 HTML is common, and
+      # the C scanner, a byte-oriented ragel machine with no concept of
+      # encoding, never cared. An ordinary regex match on such a string raises
+      # ArgumentError, so those get a binary view.
+      #
+      # A source that is already valid in an ASCII-compatible encoding needs no
+      # copy: StringScanner#pos and #skip are byte-oriented whatever the
+      # encoding, so the offset arithmetic here is unaffected, and `\s`, `\S`
+      # and the character classes used below are all ASCII-only in Ruby. That
+      # matters because the copy is the size of the document -- 1.5MB of
+      # copying per parse, on top of a second full copy this used to make to
+      # re-tag the source for output.
+      @scan_src =
+        if source.encoding.ascii_compatible? && source.valid_encoding?
+          source
+        else
+          source.b
+        end
+
+      @ss = StringScanner.new(@scan_src)
     end
 
     def tokens
@@ -151,8 +161,8 @@ module Hpricot
       term_len = @ss.matched.bytesize
       body_end = @ss.pos - term_len
       # Find target/rest boundaries against the binary buffer (safe
-      # regardless of @src's declared encoding), then slice @src itself so
-      # the resulting strings keep @src's encoding.
+      # regardless of the source's declared encoding), then slice by byte offset so
+      # the resulting strings carry the output encoding.
       bin_body = @scan_src.byteslice(body_start, body_end - body_start)
       target_len = bin_body[/\A\S*/].bytesize
       remainder = bin_body.byteslice(target_len..)
@@ -217,6 +227,22 @@ module Hpricot
     # scanner), and neither is `<div =foo>`.
     ATTR_NAME_RE = %r{[^\s=/><"']+}
 
+    # One attribute in a single scan: leading whitespace, the name, and
+    # optionally '=' with a value in any of its three forms.
+    #
+    # This loop used to make six StringScanner calls per attribute plus a
+    # byteslice each for the name and the value. One check and one scan
+    # measured ~47% faster on the scanning loop in isolation, and the capture
+    # groups are the strings themselves, so the byteslices go away too.
+    #
+    # The unquoted alternative excludes a LEADING quote deliberately. Without
+    # that, '<div a="unclosed>' would match '"unclosed>' as an unquoted value
+    # and parse as an element; instead the next iteration meets the stray quote,
+    # fails to match a name, and the whole tag falls back to text the way the C
+    # scanner does. '<' is excluded throughout per hpricot_common.rl:23 --
+    # including it was quadratic.
+    ATTR_RE = %r{\s*([^\s=/><"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s<>"'][^\s<>]*)?))?}
+
     # Tag parsing is ALL-OR-NOTHING, matching the ragel grammar. If the
     # attribute list does not parse cleanly through to a closing `>`, the whole
     # construct is text rather than a malformed element. Verified against the C
@@ -245,58 +271,36 @@ module Hpricot
       @ss.pos += 1                    # consume '<' without allocating
       name_start = @ss.pos
       # skip, not scan: scan allocates the matched String only for it to be
-      # discarded, because the visible value is re-sliced from @src by `span`
+      # discarded, because the visible value is re-sliced by `span`
       # to keep the source encoding. Same below, six times per tag.
       @ss.skip(NAME_RE)
       name = span(name_start, @ss.pos - name_start)
       attrs = {}
 
       loop do
-        @ss.skip(/\s+/)
-        return text_from(start) if @ss.eos?   # no '>' before EOF
-        break if @ss.check(%r{/?>})
+        break if @ss.check(%r{\s*/?>})
+        return text_from(start) if @ss.scan(ATTR_RE).nil?
 
-        key_start = @ss.pos
-        return text_from(start) if @ss.skip(ATTR_NAME_RE).nil?
-
-        key = span(key_start, @ss.pos - key_start)
-
-        val = nil
-        if @ss.skip(/\s*=\s*/)
-          val = if @ss.check(/["']/)
-                  q_start = @ss.pos
-                  quoted_len = @ss.skip(/"[^"]*"|'[^']*'/)
-                  # An opening quote with no closing quote never terminates.
-                  return text_from(start) if quoted_len.nil?
-
-                  span(q_start + 1, quoted_len - 2)
-                else
-                  # hpricot_common.rl:23's UnqAttr can only START with a
-                  # non-quote character, but its body tolerates a quote
-                  # anywhere -- except the %aunq action then strips exactly
-                  # one trailing quote, so "class=xyz'" parses as "xyz" (a
-                  # stray closing quote someone forgot to open).
-                  v_start = @ss.pos
-                  # '<' is excluded, per hpricot_common.rl:23
-                  #   UnqAttr = ... [^ \t\r\n<>"'] ... [^ \t\r\n<>]*
-                  # Including it let the attribute loop run past every '<' to
-                  # EOF, at which point text_from rewound to the tag's start and
-                  # text() consumed only to the NEXT '<' -- so every subsequent
-                  # '<' rescanned the same tail. That is quadratic: 35KB of
-                  # "<a href=x" took 6s, and 1MB would have taken ~90 minutes.
-                  @ss.skip(%r{[^\s<>]*})
-                  unq = span(v_start, @ss.pos - v_start)
-                  unq = unq[0...-1] if unq.end_with?('"', "'")
-                  # A completely empty, unquoted value (name= immediately
-                  # followed by whitespace or '>') never gets marked at all
-                  # by hpricot_common.rl:23's UnqAttr -- only an explicit ""
-                  # or '' does. Verified against the C scanner: <div a=> has
-                  # {"a"=>nil}, but <div a=""> has {"a"=>""}.
-                  unq.empty? ? nil : unq
-                end
-        end
+        key = retag(@ss[1])
         key = downcase(key) unless @xml
-        attrs[key] = val
+
+        # The three value alternatives are mutually exclusive, so at most one
+        # group is set: 2 is double-quoted, 3 single-quoted, 4 unquoted.
+        if (val = @ss[2] || @ss[3])
+          attrs[key] = retag(val)
+        elsif (val = @ss[4])
+          # hpricot_common.rl:23's %aunq action strips exactly one trailing
+          # quote, so "class=xyz'" parses as "xyz" -- a stray closing quote
+          # someone forgot to open.
+          val = val[0...-1] if val.end_with?('"', "'")
+          # A completely empty unquoted value (name= followed immediately by
+          # whitespace or '>') is never marked at all; only an explicit "" or
+          # '' is. Verified against the C scanner: <div a=> gives {"a"=>nil},
+          # <div a=""> gives {"a"=>""}.
+          attrs[key] = val.empty? ? nil : retag(val)
+        else
+          attrs[key] = nil
+        end
       end
 
       empty = !@ss.skip(%r{\s*/>}).nil?
@@ -314,8 +318,23 @@ module Hpricot
       text(start)
     end
 
+    # Re-tags a string the regex engine produced from the scanning buffer.
+    # force_encoding does not copy, so this is free, and it is a no-op unless
+    # the source was BINARY and the output encoding is default_external.
+    def retag(str)
+      return str if str.nil? || str.encoding == @out_encoding
+
+      str.force_encoding(@out_encoding)
+    end
+
+    # Slices from the scanning buffer and re-tags the result, rather than
+    # slicing a separately re-encoded copy of the whole document.
+    # String#force_encoding does not copy, so this costs one allocation for the
+    # slice and nothing for the encoding.
     def span(start, length = @ss.pos - start)
-      @src.byteslice(start, length)
+      out = @scan_src.byteslice(start, length)
+      out.force_encoding(@out_encoding) if out && out.encoding != @out_encoding
+      out
     end
 
     # String#downcase raises ArgumentError on a string that is not valid in

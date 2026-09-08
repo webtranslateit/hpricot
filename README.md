@@ -84,15 +84,15 @@ several runs.
 
 | Input | C/ragel scanner | pure Ruby | + YJIT | ratio (YJIT) |
 |---|---|---|---|---|
-| 26 KB | 0.4 ms | 2.3 ms | 1.7 ms | 4.3x |
-| 186 KB | 4.4 ms | 23.6 ms | 14.1 ms | 3.2x |
-| 1.5 MB | 46.9 ms | 210.9 ms | 130.3 ms | 2.8x |
-| 5 MB | 181.4 ms | 714.5 ms | 453.7 ms | 2.5x |
+| 26 KB | 0.4 ms | 2.3 ms | 1.8 ms | 4.5x |
+| 186 KB | 4.3 ms | 22.8 ms | 15.7 ms | 3.7x |
+| 1.5 MB | 45.4 ms | 190.6 ms | 151.3 ms | 3.3x |
+| 5 MB | 153.2 ms | 716.5 ms | 554.4 ms | 3.6x |
 
-Both are linear; the ratio narrows on larger inputs as per-token overhead
-amortises. YJIT is worth roughly 30% and needs no code change. Parsing is under
-half the cost of even parse-plus-extract, before encoding detection, entity
-decoding or database work, so it is not the bottleneck in any real pipeline.
+Both are linear. YJIT is worth roughly 25-30% and needs no code change. Parsing
+is under half the cost of even parse-plus-extract, before encoding detection,
+entity decoding or database work, so it is not the bottleneck in any real
+pipeline.
 
 ### Malformed input: faster than the C scanner
 
@@ -114,13 +114,32 @@ scaling ratio for each of them and fails if any becomes quadratic again.
 
 ### Where the time goes
 
-Scanning is ~80% of parse time and tree building ~20%, so the scanner is where
-tuning belongs. Two changes took the well-formed gap from 5-7x to 4-5x, both by
-removing allocations rather than changing algorithms: dispatching on the first
-byte so a text token does not attempt four construct regexes first, and using
-`StringScanner#skip` in place of `#scan` wherever the matched text is discarded
-— `scan` allocates a String for the match even when only its success matters,
-which happened six times per tag. Allocations fell from 6.3 to 4.8 per token.
+Scanning is ~80% of parse time and tree building ~20%. Profiling the scanner
+puts GC at 22% of samples (13.9% sweeping, 7.7% marking) and `String#byteslice`
+at another 10%, so allocation pressure dominates and that is where tuning has
+to aim.
+
+What worked:
+
+* Dispatching on the first byte, so a text token does not attempt four
+  construct regexes before falling through.
+* `StringScanner#skip` instead of `#scan` wherever the matched text is
+  discarded — `scan` allocates a String for the match even when only its
+  success matters.
+* Matching a whole attribute in one scan rather than six calls, using the
+  capture groups directly instead of separate byteslices (~5%).
+* Not copying the document. A source already valid in an ASCII-compatible
+  encoding is scanned in place: `StringScanner#pos` and `#skip` are
+  byte-oriented whatever the encoding, and the character classes here are all
+  ASCII-only. This removes two full-document copies per parse — the scanning
+  buffer and a re-encoded copy for slicing — so a 5 MB upload no longer
+  allocates 10 MB of copies. Peak RSS is dominated by the parse tree, so this
+  does not show up there; it is an allocation win, not a footprint one.
+
+What did not work, measured and reverted: interning repeated tag names and
+attribute keys. `string` and `name` recur thousands of times in a translation
+file, but the lookup still allocates the temporary it searches with, so the
+allocation count was unchanged and the hash probe cost as much as it saved.
 
 ### Why this is viable now and was not in 2006
 
