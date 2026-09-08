@@ -166,10 +166,17 @@ module Hpricot
     # Emitting a half-parsed element instead would invent attributes out of
     # fragments of the value, which is how real documents ended up with keys
     # like `http:` and `Paulo"`.
+    # hpricot_common.rl:9-10: Name = [A-Za-z_:] NameChar*, NameChar =
+    # [\-A-Za-z0-9._:?]. A tag name that doesn't fit this (e.g. JavaScript's
+    # "<scr" + "ipt" string-concatenation trick, which leaves a stray
+    # apostrophe right after "scr") does not match StartTag at all, so the
+    # whole construct falls back to text -- see the all-or-nothing note above.
+    NAME_RE = /[A-Za-z_:][\-A-Za-z0-9._:?]*/
+
     def tag(start)
       @ss.getch                       # consume '<'
       name_start = @ss.pos
-      @ss.scan(%r{[^\s/>]+})
+      @ss.scan(NAME_RE)
       name = span(name_start, @ss.pos - name_start)
       attrs = {}
 
@@ -201,7 +208,13 @@ module Hpricot
                   v_start = @ss.pos
                   @ss.scan(%r{[^\s>]*})
                   unq = span(v_start, @ss.pos - v_start)
-                  (unq.end_with?('"', "'") ? unq[0...-1] : unq)
+                  unq = unq[0...-1] if unq.end_with?('"', "'")
+                  # A completely empty, unquoted value (name= immediately
+                  # followed by whitespace or '>') never gets marked at all
+                  # by hpricot_common.rl:23's UnqAttr -- only an explicit ""
+                  # or '' does. Verified against the C scanner: <div a=> has
+                  # {"a"=>nil}, but <div a=""> has {"a"=>""}.
+                  unq.empty? ? nil : unq
                 end
         end
         key = downcase(key) unless @xml
