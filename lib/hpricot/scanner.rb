@@ -22,7 +22,18 @@ module Hpricot
       @xml = xml
       @fixup_tags = fixup_tags
       @xhtml_strict = xhtml_strict
-      @ss = StringScanner.new(source)
+      # StringScanner matches against @scan_src using regexes tied to ITS
+      # encoding. Documents with an invalid byte sequence for their tagged
+      # encoding (common with mislabelled Latin-1/CP-1252 HTML) would make
+      # ordinary regex matching raise ArgumentError, which the C scanner --
+      # a byte-oriented ragel machine with no concept of encoding -- never
+      # did. So all matching happens against a binary (ASCII-8BIT) view;
+      # every substring that becomes visible token data (raw spans, text,
+      # comment/CDATA content, tag/attribute names and values) is instead
+      # re-sliced from @src by byte offset, via `span` or `String#byteslice`,
+      # so it keeps @src's own encoding rather than being forced binary.
+      @scan_src = source.dup.force_encoding(Encoding::ASCII_8BIT)
+      @ss = StringScanner.new(@scan_src)
     end
 
     def tokens
@@ -45,11 +56,11 @@ module Hpricot
         # ragel grammar matches literal uppercase DOCTYPE only, so
         # '<!doctype html>' is text. Verified against the C scanner.
       elsif (m = @ss.scan(%r{</([^\s>]*)\s*>?}))
-        name = @ss[1]
+        name = span(start + 2, @ss[1].bytesize)
         # hpricot_scan.rl:317-324 downcases stag/emptytag/etag names alike in
         # HTML mode (it is the same lookup used to find the tag's content
         # model in ElementContent, whose keys are all lowercase).
-        Token.new(:etag, @xml ? name : name.downcase, nil, nil, m, nil)
+        Token.new(:etag, @xml ? name : downcase(name), nil, nil, span(start), nil)
       elsif @ss.check(/<[A-Za-z_:]/)
         tag(start)
       else
@@ -57,42 +68,45 @@ module Hpricot
       end
     end
 
-    # Scans to `terminator`, or to EOF if it never appears (liberality).
-    def upto(terminator)
-      body = @ss.scan_until(terminator)
-      return [@ss.scan(/.*/m), false] if body.nil?
-
-      [body[0...-terminator.source.length] || body, true]
-    end
-
     def comment(start)
-      inner = @ss.scan_until(/-->/)
-      if inner.nil?
-        inner = @ss.scan(/.*/m).to_s
-        content = inner
+      content_start = @ss.pos
+      if @ss.scan_until(/-->/)
+        content = span(content_start, @ss.pos - content_start - 3)
       else
-        content = inner[0...-3]
+        @ss.scan(/.*/m)
+        content = span(content_start, @ss.pos - content_start)
       end
       Token.new(:comment, nil, nil, content, span(start), nil)
     end
 
     def cdata(start)
-      inner = @ss.scan_until(/\]\]>/)
-      if inner.nil?
-        inner = @ss.scan(/.*/m).to_s
-        content = inner
+      content_start = @ss.pos
+      if @ss.scan_until(/\]\]>/)
+        content = span(content_start, @ss.pos - content_start - 3)
       else
-        content = inner[0...-3]
+        @ss.scan(/.*/m)
+        content = span(content_start, @ss.pos - content_start)
       end
       Token.new(:cdata, nil, nil, content, span(start), nil)
     end
 
     def procins(start)
-      inner = @ss.scan_until(/\?>/)
-      inner = @ss.scan(/.*/m).to_s if inner.nil?
-      body = inner.sub(/\?>\z/, '')
-      target = body[/\A[^\s]+/].to_s
-      rest = body[target.length..].to_s.strip
+      body_start = @ss.pos
+      closed = !@ss.scan_until(/\?>/).nil?
+      @ss.scan(/.*/m) unless closed
+      body_end = @ss.pos - (closed ? 2 : 0)
+      # Find target/rest boundaries against the binary buffer (safe
+      # regardless of @src's declared encoding), then slice @src itself so
+      # the resulting strings keep @src's encoding.
+      bin_body = @scan_src.byteslice(body_start, body_end - body_start)
+      target_len = bin_body[/\A\S*/].bytesize
+      remainder = bin_body.byteslice(target_len..)
+      lead_ws = remainder[/\A\s*/].bytesize
+      trail_ws = remainder[/\s*\z/].bytesize
+      rest_len = [remainder.bytesize - lead_ws - trail_ws, 0].max
+
+      target = span(body_start, target_len)
+      rest = span(body_start + target_len + lead_ws, rest_len)
 
       if target == 'xml'
         Token.new(:xmldecl, target, parse_attrs(rest), rest, span(start), nil)
@@ -139,7 +153,9 @@ module Hpricot
     # like `http:` and `Paulo"`.
     def tag(start)
       @ss.getch                       # consume '<'
-      name = @ss.scan(%r{[^\s/>]+}).to_s
+      name_start = @ss.pos
+      @ss.scan(%r{[^\s/>]+})
+      name = span(name_start, @ss.pos - name_start)
       attrs = {}
 
       loop do
@@ -147,22 +163,33 @@ module Hpricot
         return text_from(start) if @ss.eos?   # no '>' before EOF
         break if @ss.check(%r{/?>})
 
-        key = @ss.scan(ATTR_NAME_RE)
-        return text_from(start) if key.nil?
+        key_start = @ss.pos
+        return text_from(start) if @ss.scan(ATTR_NAME_RE).nil?
+
+        key = span(key_start, @ss.pos - key_start)
 
         val = nil
         if @ss.scan(/\s*=\s*/)
           val = if @ss.check(/["']/)
+                  q_start = @ss.pos
                   quoted = @ss.scan(/"[^"]*"|'[^']*'/)
                   # An opening quote with no closing quote never terminates.
                   return text_from(start) if quoted.nil?
 
-                  quoted[1...-1]
+                  span(q_start + 1, quoted.bytesize - 2)
                 else
+                  # hpricot_common.rl:23's UnqAttr can only START with a
+                  # non-quote character, but its body tolerates a quote
+                  # anywhere -- except the %aunq action then strips exactly
+                  # one trailing quote, so "class=xyz'" parses as "xyz" (a
+                  # stray closing quote someone forgot to open).
+                  v_start = @ss.pos
                   @ss.scan(%r{[^\s>]*})
+                  unq = span(v_start, @ss.pos - v_start)
+                  (unq.end_with?('"', "'") ? unq[0...-1] : unq)
                 end
         end
-        key = key.downcase unless @xml
+        key = downcase(key) unless @xml
         attrs[key] = val
       end
 
@@ -170,7 +197,7 @@ module Hpricot
       @ss.scan(/\s*>/) unless empty
 
       Token.new(empty ? :emptytag : :stag,
-                @xml ? name : name.downcase,
+                @xml ? name : downcase(name),
                 attrs, nil, span(start), empty)
     end
 
@@ -181,32 +208,66 @@ module Hpricot
       text(start)
     end
 
-    def span(start)
-      @src.byteslice(start, @ss.pos - start)
+    def span(start, length = @ss.pos - start)
+      @src.byteslice(start, length)
     end
 
-    ATTR_RE = /\s*([^\s=\/><]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/
+    # String#downcase raises ArgumentError on a string that is not valid in
+    # its own encoding (routine for mislabelled-encoding documents). Fall
+    # back to an ASCII-only-safe downcase rather than propagate that -- tag
+    # and attribute names are overwhelmingly ASCII, and a scanner must never
+    # raise on malformed input.
+    def downcase(str)
+      str.downcase
+    rescue ArgumentError
+      str.b.downcase.force_encoding(str.encoding)
+    end
 
+    # Used only for the pseudo-attributes of an <?xml ...?> declaration.
+    # Operates like `tag`'s attribute loop: match against a binary view for
+    # safety, then byteslice the result back out of `str` so values keep
+    # str's own encoding.
     def parse_attrs(str)
+      str = str.to_s
       attrs = {}
-      s = StringScanner.new(str.to_s)
-      while s.scan(ATTR_RE)
-        key = s[1]
-        val = s[2]
-        val = val[1...-1] if val && (val.start_with?('"') || val.start_with?("'"))
-        key = key.downcase unless @xml
+      s = StringScanner.new(str.b)
+
+      until s.eos?
+        s.scan(/\s+/)
+        key_start = s.pos
+        break if s.scan(%r{[^\s=/><]+}).nil?
+
+        key = str.byteslice(key_start, s.pos - key_start)
+
+        val = nil
+        if s.scan(/\s*=\s*/)
+          val = if (q = s.scan(/"[^"]*"|'[^']*'/))
+                  str.byteslice(s.pos - q.bytesize + 1, q.bytesize - 2)
+                else
+                  v_start = s.pos
+                  s.scan(%r{[^\s>]*})
+                  str.byteslice(v_start, s.pos - v_start)
+                end
+        end
+        key = downcase(key) unless @xml
         attrs[key] = val
       end
+
       attrs
     end
 
     def parse_doctype(raw)
+      bin = raw.b
       attrs = {}
-      if (m = raw.match(/\A<!DOCTYPE\s+([^\s>]+)/i))
-        attrs[:target] = m[1]
+      if (m = bin.match(/\A<!DOCTYPE\s+([^\s>]+)/i))
+        attrs[:target] = raw.byteslice(m.begin(1), m[1].bytesize)
       end
-      attrs[:public_id] = Regexp.last_match(1) if raw =~ /PUBLIC\s+"([^"]*)"/i
-      attrs[:system_id] = Regexp.last_match(1) if raw =~ /(?:SYSTEM|"\s+)"([^"]*)"\s*>?\z/i
+      if (m = bin.match(/PUBLIC\s+"([^"]*)"/i))
+        attrs[:public_id] = raw.byteslice(m.begin(1), m[1].bytesize)
+      end
+      if (m = bin.match(/(?:SYSTEM|"\s+)"([^"]*)"\s*>?\z/i))
+        attrs[:system_id] = raw.byteslice(m.begin(1), m[1].bytesize)
+      end
       attrs
     end
   end
