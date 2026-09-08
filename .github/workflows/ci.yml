@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Weekly, so toolchain rot surfaces before it blocks a release.
+    - cron: '0 6 * * 1'
+
+jobs:
+  # The gate. These five files are deterministic: 27 tests / 6006 assertions,
+  # green on every run. test_parser.rb is excluded deliberately — see below.
+  test:
+    name: ${{ matrix.os }} / ruby ${{ matrix.ruby }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Currently maintained Ruby branches only. 3.2 reached EOL 2026-03-31.
+        os: [ubuntu-latest, macos-latest]
+        ruby: ['3.3', '3.4', '4.0']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      # Built directly rather than via `rake compile`: that task depends on the
+      # `ragel` task, and ragel is not needed because the generated .c files are
+      # checked in. Requiring ragel here would block every contributor without it.
+      - name: Build extensions
+        run: |
+          (cd ext/hpricot_scan && ruby extconf.rb && make)
+          (cd ext/fast_xs     && ruby extconf.rb && make)
+
+      - name: Test
+        run: |
+          ruby -Ilib -Iext/hpricot_scan -Iext/fast_xs -Itest \
+            -e 'Dir["test/test_{alter,builder,paths,preserved,xml}.rb"].each { |f| require File.expand_path(f) }'
+
+  # Ruby trunk. Allowed to fail: it breaks for reasons upstream of this repo.
+  ruby-head:
+    name: ruby-head (experimental)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: head
+          bundler-cache: true
+      - name: Build extensions
+        run: |
+          (cd ext/hpricot_scan && ruby extconf.rb && make)
+          (cd ext/fast_xs     && ruby extconf.rb && make)
+      - name: Test
+        run: |
+          ruby -Ilib -Iext/hpricot_scan -Iext/fast_xs -Itest \
+            -e 'Dir["test/test_{alter,builder,paths,preserved,xml}.rb"].each { |f| require File.expand_path(f) }'
+
+  # KNOWN FAILING, and that is the point.
+  #
+  # The C scanner reads uninitialised memory, so parsing the same bytes produces
+  # different trees from one process to the next. This job runs test_parser.rb 20
+  # times and prints the spread of results. It is allowed to fail and exists to
+  # document the defect until the pure-Ruby scanner replaces it — see
+  # docs/superpowers/plans/2026-09-08-pure-ruby-scanner.md.
+  #
+  # When that port lands: delete this job, and fold test_parser.rb into the gate
+  # above alongside a determinism check that requires 20 identical runs.
+  scanner-nondeterminism:
+    name: 'scanner nondeterminism (known failing)'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+          bundler-cache: true
+      - name: Build extensions
+        run: |
+          (cd ext/hpricot_scan && ruby extconf.rb && make)
+          (cd ext/fast_xs     && ruby extconf.rb && make)
+      - name: Measure run-to-run variation
+        run: |
+          for i in $(seq 1 20); do
+            ruby -Ilib -Iext/hpricot_scan -Iext/fast_xs -Itest test/test_parser.rb 2>&1 \
+              | grep -oE '[0-9]+ failures, [0-9]+ errors' || echo 'crashed'
+          done | sort | uniq -c | tee results.txt
+          if [ "$(wc -l < results.txt)" -eq 1 ]; then
+            echo "::notice::Deterministic across 20 runs. If this stays green, the port may be done."
+          else
+            echo "::warning::Nondeterministic: $(wc -l < results.txt) distinct outcomes across 20 runs."
+            exit 1
+          fi

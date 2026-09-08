@@ -6,7 +6,7 @@
 
 **Architecture:** A `StringScanner`-based tokenizer emits tokens that each retain their exact source byte span. A tree builder turns that token stream into the existing `Hpricot::Doc` node graph, reusing the current HTML implicit-close rules from `ElementContent`. Node classes become plain Ruby objects with the same slots the C structs had, so `traverse.rb`, `elements.rb`, `builder.rb` and downstream consumers are untouched. Fidelity comes from *not decoding*: raw spans are stored verbatim and emitted unchanged for unmodified nodes, which is exactly how the C version achieves it.
 
-**Tech Stack:** Ruby >= 3.2, `strscan` (stdlib, C-backed), Test::Unit (existing suite), no native extensions.
+**Tech Stack:** Ruby >= 3.3, `strscan` (stdlib, C-backed), Test::Unit (existing suite), no native extensions.
 
 **Non-goals:** Porting `hpricot_css.rl` (dead — `Elements#search` uses Ruby regex in `elements.rb`; nothing in `lib/` calls `Hpricot.css`) and `fast_xs` beyond a Ruby equivalent. `Hpricot.scan` with a block is dropped (it segfaults today and has no callers).
 
@@ -78,7 +78,12 @@ The 2 errors are `Fixnum` (`elements.rb:68`, removed in Ruby 3.2). The 3 failure
 
 ---
 
-## Task 1: Stabilise the baseline
+## Task 1: Stabilise the baseline — ALREADY DONE
+
+Landed ahead of this plan so CI could be stood up. `lib/hpricot/elements.rb:68`
+now reads `if expr.kind_of? Integer`, and `test_parser.rb` reports 0 errors.
+Verify with the Step 1 command and move to Task 2; the steps are kept for the
+record.
 
 **Files:**
 - Modify: `lib/hpricot/elements.rb:68`
@@ -1691,7 +1696,7 @@ Gem::Specification.new do |s|
   s.homepage = 'https://github.com/webtranslateit/hpricot'
   s.license = 'MIT'
 
-  s.required_ruby_version = '>= 3.2'
+  s.required_ruby_version = '>= 3.3'
   s.files = `git ls-files -z`.split("\x0").reject { |f| f.start_with?('docs/', 'test/corpus/') }
   s.require_paths = ['lib']
   s.extra_rdoc_files = ['README.md', 'CHANGELOG', 'COPYING']
@@ -1790,14 +1795,21 @@ Also drops setup.rb (unreferenced since before RubyGems) and .travis.yml
 
 ---
 
-## Task 14: CI
+## Task 14: Tighten CI
+
+CI already exists and is green (see `.github/workflows/ci.yml`, landed ahead of
+this plan). Today it gates on five deterministic test files and carries a
+`scanner-nondeterminism` job that is *expected* to fail, documenting the C bug.
+This task collapses that once the Ruby scanner makes it obsolete.
 
 **Files:**
-- Create: `.github/workflows/ci.yml`
+- Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Write the workflow**
+- [ ] **Step 1: Replace the workflow**
 
-Create `.github/workflows/ci.yml`:
+The extension-build steps go away entirely (there is nothing to compile), the
+gate widens to the whole suite, and `scanner-nondeterminism` becomes a real
+determinism assertion instead of a known failure. Replace `.github/workflows/ci.yml`:
 
 ```yaml
 name: CI
@@ -1814,7 +1826,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        ruby: ['3.2', '3.3', '3.4', '4.0']
+        ruby: ['3.3', '3.4', '4.0']
         include:
           - os: ubuntu-latest
             ruby: head
@@ -1851,6 +1863,12 @@ jobs:
 ```
 
 The `jruby` job is the payoff for dropping the Java implementation: the same Ruby code should now run there for free. It is `continue-on-error` until it is proven green.
+
+Note what disappears relative to the pre-port workflow: both `Build extensions`
+steps, and the `scanner-nondeterminism` job. That job existed to document a
+defect; once this plan is done it is replaced by the `determinism` job above,
+which *asserts* 20 identical runs instead of expecting variation. Deleting it is
+the signal that the port achieved its purpose.
 
 - [ ] **Step 2: Update the Gemfile**
 
@@ -1980,7 +1998,8 @@ Prepend to `CHANGELOG`:
 * Removed BlankSlate, which installed a process-wide Object.method_added
   hook. CssProxy now inherits from BasicObject.
 * String#fast_xs is now Ruby. The C version's CP-1252 table was buggy.
-* Requires Ruby >= 3.2. JRuby is supported by the same code.
+* Requires Ruby >= 3.3 (3.2 reached EOL 2026-03-31). JRuby is supported by
+  the same code.
 ```
 
 - [ ] **Step 2: Verify the consumer still works**

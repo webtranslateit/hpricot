@@ -65,7 +65,7 @@ module Hpricot
     #
     # See Hpricot::Container::Trav.at for more.
     def at(expr, &blk)
-      if expr.kind_of? Fixnum
+      if expr.kind_of? Integer
         super
       else
         search(expr, &blk)[0]

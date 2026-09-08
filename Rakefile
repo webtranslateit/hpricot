@@ -42,7 +42,6 @@ SPEC =
     s.name = NAME
     s.version = VERS
     s.platform = Gem::Platform::RUBY
-    s.has_rdoc = true
     s.rdoc_options += RDOC_OPTS
     s.extra_rdoc_files = ["README.md", "CHANGELOG", "COPYING"]
     s.summary = "a swift, liberal HTML parser with a fantastic library"
