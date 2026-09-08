@@ -92,9 +92,16 @@ module Hpricot
 
     def procins(start)
       body_start = @ss.pos
-      closed = !@ss.scan_until(/\?>/).nil?
-      @ss.scan(/.*/m) unless closed
-      body_end = @ss.pos - (closed ? 2 : 0)
+      # hpricot_common.rl:47: EndXmlProcIns = "?"? ">" -- a processing
+      # instruction closes at the first bare '>' too, not only "?>". The C
+      # scanner also mangles content/raw fidelity for the bare '>' case (it
+      # drops the character right before '>', and fabricates a "?>" in
+      # raw_string that was never in the source); this port keeps every byte
+      # instead, per this project's round-tripping requirement.
+      found = @ss.scan_until(/\??>/)
+      term_len = found ? @ss.matched.bytesize : 0
+      @ss.scan(/.*/m) unless found
+      body_end = @ss.pos - term_len
       # Find target/rest boundaries against the binary buffer (safe
       # regardless of @src's declared encoding), then slice @src itself so
       # the resulting strings keep @src's encoding.
@@ -108,7 +115,15 @@ module Hpricot
       target = span(body_start, target_len)
       rest = span(body_start + target_len + lead_ws, rest_len)
 
-      if target == 'xml'
+      # hpricot_common.rl:39: XmlDecl requires "<?xml" to be followed
+      # immediately by a well-formed version pseudo-attribute; a "<?xml ...?>"
+      # that merely happens to have the target "xml" (no version, or a
+      # malformed one) is just an ordinary ProcIns. Verified against the C
+      # scanner: <?xml blah='blah'?> is a ProcIns, not an XMLDecl.
+      bin_rest = bin_body.byteslice(target_len + lead_ws, rest_len)
+      xmldecl = target == 'xml' && bin_rest.match?(/\Aversion\s*=\s*(["']).*?\1/)
+
+      if xmldecl
         Token.new(:xmldecl, target, parse_attrs(rest), rest, span(start), nil)
       else
         Token.new(:procins, target, nil, rest, span(start), nil)
