@@ -41,7 +41,9 @@ module Hpricot
       if @ss.scan(/<!--/)      then comment(start)
       elsif @ss.scan(/<!\[CDATA\[/) then cdata(start)
       elsif @ss.scan(/<\?/)    then procins(start)
-      elsif @ss.scan(/<!/)     then doctype(start)
+      elsif @ss.scan(/<!DOCTYPE/) then doctype(start) # case-sensitive: the
+        # ragel grammar matches literal uppercase DOCTYPE only, so
+        # '<!doctype html>' is text. Verified against the C scanner.
       elsif (m = @ss.scan(%r{</([^\s>]*)\s*>?}))
         Token.new(:etag, @ss[1], nil, nil, m, nil)
       elsif @ss.check(/<[A-Za-z_:]/)
@@ -109,22 +111,49 @@ module Hpricot
       Token.new(:text, nil, nil, nil, span(start), nil)
     end
 
+    # Attribute names. Note that quotes are excluded: `<div "bare">` is not a
+    # tag with an attribute called `"bare"`, it is text (verified against the C
+    # scanner), and neither is `<div =foo>`.
+    ATTR_NAME_RE = %r{[^\s=/><"']+}
+
+    # Tag parsing is ALL-OR-NOTHING, matching the ragel grammar. If the
+    # attribute list does not parse cleanly through to a closing `>`, the whole
+    # construct is text rather than a malformed element. Verified against the C
+    # scanner:
+    #
+    #   <div a="1" b>            -> Elem(div, ["a", "b"])
+    #   <div a=1 b=2>            -> Elem(div, ["a", "b"])
+    #   <div a==b>               -> Elem(div, ["a"])       unquoted value "=b"
+    #   <div style="a="b" c">    -> Text                   stray = after a value
+    #   <div a="unclosed>        -> Text                   quote never closes
+    #   <div =foo>               -> Text                   name cannot start =
+    #   <div "bare">             -> Text                   name cannot start "
+    #   <div id="a"              -> Text                   EOF before >
+    #
+    # Emitting a half-parsed element instead would invent attributes out of
+    # fragments of the value, which is how real documents ended up with keys
+    # like `http:` and `Paulo"`.
     def tag(start)
       @ss.getch                       # consume '<'
-      name = @ss.scan(/[^\s\/>]+/).to_s
+      name = @ss.scan(%r{[^\s/>]+}).to_s
       attrs = {}
 
       loop do
         @ss.scan(/\s+/)
-        break if @ss.eos? || @ss.check(/\/?>/)
+        return text_from(start) if @ss.eos?   # no '>' before EOF
+        break if @ss.check(%r{/?>})
 
-        key = @ss.scan(%r{[^\s=/><]+})
-        break if key.nil?
+        key = @ss.scan(ATTR_NAME_RE)
+        return text_from(start) if key.nil?
 
         val = nil
         if @ss.scan(/\s*=\s*/)
-          val = if (q = @ss.scan(/"[^"]*"|'[^']*'/))
-                  q[1...-1]
+          val = if @ss.check(/["']/)
+                  quoted = @ss.scan(/"[^"]*"|'[^']*'/)
+                  # An opening quote with no closing quote never terminates.
+                  return text_from(start) if quoted.nil?
+
+                  quoted[1...-1]
                 else
                   @ss.scan(%r{[^\s>]*})
                 end
@@ -139,6 +168,13 @@ module Hpricot
       Token.new(empty ? :emptytag : :stag,
                 @xml ? name : name.downcase,
                 attrs, nil, span(start), empty)
+    end
+
+    # Rewinds to +start+ and re-reads the construct as text. Used when a tag
+    # fails to parse; the bytes must still be accounted for exactly once.
+    def text_from(start)
+      @ss.pos = start
+      text(start)
     end
 
     def span(start)

@@ -35,6 +35,11 @@ class TestDifferential < Test::Unit::TestCase
   LEGACY_CONSISTENCY_RUNS = 4
 
   def assert_matches_legacy(path, xml:)
+    unless DifferentialHelper.legacy_available?
+      omit('set HPRICOT_LEGACY_TREE to a built pre-switchover checkout ' \
+           '(see test/differential_helper.rb) to run the comparison')
+    end
+
     legacy = DifferentialHelper.legacy_parse(path, xml: xml)
 
     # The old scanner crashing is a known defect, not a reason to fail the

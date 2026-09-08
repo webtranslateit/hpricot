@@ -36,14 +36,39 @@ module Hpricot
     end
   end
 
+  # Comment and CData carry a raw_string in addition to their content, which
+  # the C extension did not. Their #content excludes the delimiters, so
+  # preserve-mode output had to reconstruct "<!--" + content + "-->"; for an
+  # UNTERMINATED comment there is no "-->" in the source and that reconstruction
+  # corrupts the document. The C scanner got this wrong in the other direction,
+  # dropping the opening "<!--" and losing four bytes:
+  #
+  #   input:  <p>a</p><!-- never closed
+  #   C:      <p>a</p> never closed        (4 bytes lost)
+  #
+  # Byte-identical round-tripping is this library's reason to exist, so the raw
+  # span is kept and emitted verbatim. For well-formed comments the two are the
+  # same string, so nothing else changes.
   class Comment < BasicNode
+    attr_accessor :raw_string
+
     alias content name
     alias content= name=
+
+    def clear_raw
+      self.raw_string = nil
+    end
   end
 
   class CData < BasicNode
+    attr_accessor :raw_string
+
     alias content name
     alias content= name=
+
+    def clear_raw
+      self.raw_string = nil
+    end
   end
 
   class DocType < AttrNode

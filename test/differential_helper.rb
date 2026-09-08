@@ -46,8 +46,16 @@ module DifferentialHelper
         out << ' ' << node.name.to_s if node.respond_to?(:name) && node.name.is_a?(String)
         if node.respond_to?(:raw_attributes) && node.raw_attributes.is_a?(Hash)
           # Sorted: attribute ORDER is compared via to_original_html, not here.
+          # Values are inspected as BINARY: String#inspect escapes differently
+          # depending on the encoding TAG, so a UTF-8-tagged and a
+          # BINARY-tagged string with identical bytes would look different
+          # here. Encoding behaviour is asserted separately, in
+          # test/test_encoding.rb; this signal is about tree shape.
           out << ' {' << node.raw_attributes.sort_by { |k, _| k.to_s }
-                             .map { |k, v| "#{k}=#{v.inspect}" }.join(',') << '}'
+                             .map { |k, v|
+                               b = v.is_a?(String) ? v.dup.force_encoding(Encoding::BINARY) : v
+                               "#{k}=#{b.inspect}"
+                             }.join(',') << '}'
         end
         out << "\n"
         kids = node.respond_to?(:children) ? node.children : nil
@@ -70,20 +78,39 @@ module DifferentialHelper
       structure: __signature(doc).dup.force_encoding(Encoding::BINARY) }
   end
 
-  # Runs the OLD C scanner out-of-process.
+  # Where the legacy C implementation lives. Once master's lib/ became the pure
+  # Ruby scanner, `require 'hpricot'` in this tree no longer loads the C
+  # extension, so the oracle has to come from a separate checkout pinned at the
+  # last commit before the switchover. Create it with:
   #
-  # ext/fast_xs must also be on $LOAD_PATH: builder.rb does `require 'fast_xs'`,
-  # and without it Ruby resolves that to an installed hpricot gem's bundle
-  # rather than the one built in this tree.
+  #   git worktree add --detach <dir> <pre-switchover-sha>
+  #   (cd <dir>/ext/hpricot_scan && ruby extconf.rb && make)
+  #   (cd <dir>/ext/fast_xs     && ruby extconf.rb && make)
+  #
+  # and point HPRICOT_LEGACY_TREE at <dir>. Without it the comparison tests
+  # skip rather than silently comparing the new scanner against itself, which
+  # would pass while testing nothing.
+  LEGACY_TREE = ENV['HPRICOT_LEGACY_TREE']
+
+  def self.legacy_available?
+    LEGACY_TREE && File.exist?(File.join(LEGACY_TREE, 'ext/hpricot_scan/hpricot_scan.bundle'))
+  end
+
+  # Runs the OLD C scanner out-of-process, from the pinned legacy tree.
+  #
+  # ext/fast_xs must also be on $LOAD_PATH: builder.rb there does
+  # `require 'fast_xs'`, and without it Ruby resolves that to an installed
+  # hpricot gem's bundle rather than the one built in that tree.
   #
   # Returns a Hash of signals, :crashed if the child died on a signal, or
   # [:error, msg] on a Ruby exception.
   def self.legacy_parse(path, xml:)
     script = <<~RUBY
-      $LOAD_PATH.unshift(#{File.join(REPO, 'lib').inspect})
-      $LOAD_PATH.unshift(#{File.join(REPO, 'ext/hpricot_scan').inspect})
-      $LOAD_PATH.unshift(#{File.join(REPO, 'ext/fast_xs').inspect})
+      $LOAD_PATH.unshift(#{File.join(LEGACY_TREE, 'lib').inspect})
+      $LOAD_PATH.unshift(#{File.join(LEGACY_TREE, 'ext/hpricot_scan').inspect})
+      $LOAD_PATH.unshift(#{File.join(LEGACY_TREE, 'ext/fast_xs').inspect})
       require 'hpricot'
+      raise 'legacy tree is not the C scanner' if $LOADED_FEATURES.grep(/hpricot_scan/).empty?
       #{SIGNATURE_SRC}
       doc = Hpricot.scan(File.binread(#{path.inspect}), #{xml ? '{ :xml => true }' : '{}'})
       $stdout.binmode

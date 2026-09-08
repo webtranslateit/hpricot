@@ -43,8 +43,8 @@ module Hpricot
     def consume(tok)
       case tok.kind
       when :text      then add(text_node(tok))
-      when :comment   then add(simple(Comment, tok.content))
-      when :cdata     then add(simple(CData, tok.content))
+      when :comment   then add(simple(Comment, tok.content, tok.raw))
+      when :cdata     then add(simple(CData, tok.content, tok.raw))
       when :procins   then add(procins(tok))
       when :xmldecl   then add(xmldecl(tok))
       when :doctype   then add(doctype(tok))
@@ -60,9 +60,10 @@ module Hpricot
       t
     end
 
-    def simple(klass, content)
+    def simple(klass, content, raw = nil)
       n = klass.allocate
       n.content = content
+      n.raw_string = raw if raw && n.respond_to?(:raw_string=)
       n
     end
 
@@ -75,11 +76,14 @@ module Hpricot
 
     def xmldecl(tok)
       x = XMLDecl.allocate
-      x.raw_attributes = {
-        version: tok.attrs['version'],
-        encoding: tok.attrs['encoding'],
-        standalone: tok.attrs['standalone']
-      }
+      # Only keys actually present in the declaration are stored. The C scanner
+      # sets each via its ATTR() macro as the grammar matches it, so an absent
+      # encoding leaves no :encoding key at all rather than one set to nil.
+      attrs = {}
+      %w[version encoding standalone].each do |k|
+        attrs[k.to_sym] = tok.attrs[k] if tok.attrs.key?(k)
+      end
+      x.raw_attributes = attrs
       x.name = tok.raw
       x
     end
@@ -94,7 +98,11 @@ module Hpricot
     def element(tok)
       e = Elem.allocate
       e.name = tok.name
-      e.raw_attributes = tok.attrs
+      # nil, not {}, when the tag carried no attributes: the C scanner only
+      # allocates the hash when its ATTR() macro first fires, so an
+      # attribute-less element has no raw_attributes at all. Code downstream
+      # distinguishes the two (Elem#attributes_as_html, and the inspect output).
+      e.raw_attributes = tok.attrs.empty? ? nil : tok.attrs
       e.raw_string = tok.raw
       e.tagno = tok.name.hash
       e.allowed = ElementContent[tok.name] unless @xml

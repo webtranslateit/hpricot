@@ -158,7 +158,11 @@ module Hpricot
     alias_method :to_s, :content
     alias_method :to_plain_text, :content
     alias_method :inner_text, :content
-    def raw_string; "<![CDATA[#{content}]]>" end
+    # Prefer the span the scanner recorded; fall back to reconstructing the
+    # delimiters for nodes built in Ruby rather than parsed. Reconstruction
+    # cannot be correct for an unterminated CDATA section, where the source
+    # has no closing "]]>".
+    def raw_string; @raw_string || "<![CDATA[#{content}]]>" end
     def output(out, opts = {})
       out <<
         if_output(opts) do
@@ -210,7 +214,9 @@ module Hpricot
 
   class Comment
     def pathname; "comment()" end
-    def raw_string; "<!--#{content}-->" end
+    # See CData#raw_string: the recorded span wins, because an unterminated
+    # comment has no "-->" to reconstruct.
+    def raw_string; @raw_string || "<!--#{content}-->" end
     def output(out, opts = {})
       out <<
         if_output(opts) do

@@ -1,5 +1,5 @@
 require 'hpricot/tags'
-require 'fast_xs'
+require 'hpricot/xs'
 require 'hpricot/htmlinfo'
 
 module Hpricot
