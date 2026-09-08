@@ -34,14 +34,14 @@ module Hpricot
     # If you need to write to a stream, try calling <tt>output(io)</tt>
     # as a method on this object.
     def to_html
-      output("")
+      output(+"")
     end
     alias_method :to_s, :to_html
 
     # Attempts to preserve the original HTML of the document, only
     # outputing new tags for elements which have changed.
     def to_original_html
-      output("", :preserve => true)
+      output(+"", :preserve => true)
     end
 
     def index(name)
@@ -73,7 +73,6 @@ module Hpricot
         end
         r
       end
-      p pos
       Elements[*
         sib.select do |x|
           sel =
@@ -177,7 +176,7 @@ module Hpricot
         reparent self.children
       else
         if respond_to?(:children) and children
-          children.map { |x| x.output("") }.join
+          children.map { |x| x.output(+"") }.join
         else
           ""
         end

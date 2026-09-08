@@ -4,12 +4,39 @@ require 'hpricot/blankslate'
 require 'hpricot/htmlinfo'
 
 module Hpricot
-  # XML unescape
+  # Codepoints that must never be produced by entity expansion: NUL and the
+  # other XML-invalid C0 controls, the UTF-16 surrogate range (which yields
+  # strings that fail valid_encoding?), and anything past the Unicode maximum
+  # (which makes Array#pack raise RangeError).
+  def self.valid_codepoint?(num)
+    return false if num < 0x9 || num > 0x10FFFF
+    return false if num == 0xB || num == 0xC
+    return false if num.between?(0xE, 0x1F)
+    return false if num.between?(0xD800, 0xDFFF)
+    true
+  end
+  private_class_method :valid_codepoint?
+
+  # 63 = ?? (query char), used for anything unrecognised or out of range
+  def self.codepoint_to_s(num)
+    valid_codepoint?(num) ? [num].pack("U*") : "?"
+  end
+  private_class_method :codepoint_to_s
+
+  # XML unescape.
+  #
+  # Operates on a UTF-8 view of the input and scrubs invalid bytes first: the
+  # expansions below always produce UTF-8, and splicing UTF-8 into a Latin-1 or
+  # BINARY string raises Encoding::CompatibilityError. Callers hand us raw file
+  # bytes, so that has to be tolerated rather than propagated.
   def self.uxs(str)
-    str.to_s.
-        gsub(/\&(\w+);/) { [NamedCharacters[$1] || 63].pack("U*") }. # 63 = ?? (query char)
-        gsub(/\&\#(\d+);/) { [$1.to_i].pack("U*") }.
-        gsub(/\&\#x([0-9a-fA-F]+);/) { [$1.to_i(16)].pack("U*") }
+    str = str.to_s
+    str = str.dup.force_encoding(Encoding::UTF_8) unless str.encoding == Encoding::UTF_8
+    str = str.scrub("?") unless str.valid_encoding?
+    str.
+        gsub(/\&(\w+);/) { codepoint_to_s(NamedCharacters[$1] || 63) }.
+        gsub(/\&\#(\d+);/) { codepoint_to_s($1.to_i) }.
+        gsub(/\&\#x([0-9a-fA-F]+);/) { codepoint_to_s($1.to_i(16)) }
   end
 
   def self.build(ele = Doc.new, assigns = {}, &blk)

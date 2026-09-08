@@ -19,7 +19,11 @@ module Hpricot
 
   module Node
     def html_quote(str)
-      "\"" + str.gsub('"', '\\"') + "\""
+      # NOTE: HTML does not honour backslash escaping inside attribute values,
+      # so a quote must become an entity or the attribute terminates early.
+      # Only " is escaped here: attributes_as_html feeds already-entity-escaped
+      # strings through this method, and escaping & would double-encode them.
+      "\"" + str.gsub('"', '&quot;') + "\""
     end
     def clear_raw; end
     def if_output(opts)
@@ -193,7 +197,7 @@ module Hpricot
 
   class ProcIns
     def pathname; "procins()" end
-    def raw_string; output("") end
+    def raw_string; output(+"") end
     def output(out, opts = {})
       out <<
         if_output(opts) do

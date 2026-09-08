@@ -25,7 +25,11 @@ class TestBuilder < Test::Unit::TestCase
 
   def test_escaping_attrs
     text = "<span style='font-family:\"MS Mincho\"'>Some text</span>"
-    assert_equal "<span style=\"font-family:\\\"MS Mincho\\\"\">Some text</span>",
+    # Attribute quotes must be escaped as entities, not backslashes: HTML does
+    # not honour backslash escaping inside an attribute value, so the old
+    # output did not even re-parse as a <span> (it degraded to Text +
+    # BogusETag) and turned a quote in an attribute into an injection point.
+    assert_equal "<span style=\"font-family:&quot;MS Mincho&quot;\">Some text</span>",
       Hpricot(text).to_html
   end
 

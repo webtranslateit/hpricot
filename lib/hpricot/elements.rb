@@ -76,7 +76,7 @@ module Hpricot
     # Convert this group of elements into a complete HTML fragment, returned as a
     # string.
     def to_html
-      map { |x| x.output("") }.join
+      map { |x| x.output(+"") }.join
     end
     alias_method :to_s, :to_html
 
