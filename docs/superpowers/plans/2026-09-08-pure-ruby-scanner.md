@@ -1331,6 +1331,21 @@ an unknown declared encoding is ignored rather than raising."
 
 ## Task 9: Replace `Hpricot.scan`
 
+**Compatibility note, verified before starting.** `lib/hpricot/tag.rb` already
+defines a custom `initialize` for every node class — `Elem` (`:75`), `BogusETag`
+(`:129`), `Text` (`:140`), `Comment` (`:157`), `DocType` (`:184`) — and each one
+assigns through the same setters `nodes.rb` provides (`self.name=`,
+`self.raw_attributes=`, `self.children=`, `self.etag=`). So the positional
+construction in `builder.rb` (`Elem.new(tag, attrs, childs, ETag.new(tag))` at
+`:137`, `DocType.new(target, pub, sys)` at `:177`, `Text.new(string)` at `:78`)
+keeps working unchanged once `tag.rb` reopens the Ruby classes. `ETag <
+BogusETag` (`tag.rb:135`) inherits `AttrNode` and is fine.
+
+The hazard to watch is load ORDER, not construction: if the C extension is
+still loaded when `nodes.rb` runs, `class Elem < ElemNode` raises `TypeError:
+superclass mismatch`. `lib/hpricot.rb` must stop requiring `hpricot_scan`
+in the same change that starts requiring `hpricot/nodes`.
+
 **Files:**
 - Modify: `lib/hpricot.rb`
 - Create: `lib/hpricot/xs.rb`
@@ -2002,6 +2017,11 @@ Prepend to `CHANGELOG`:
 * Removed BlankSlate, which installed a process-wide Object.method_added
   hook. CssProxy now inherits from BasicObject.
 * String#fast_xs is now Ruby. The C version's CP-1252 table was buggy.
+* Hpricot::DocType.new, Builder#doctype, #xhtml_transitional and #xhtml_strict
+  work again. With the C nodes the DocType attribute slot was nil, so the
+  setters called by DocType#initialize (tag.rb:184) hit rb_hash_aset(Qnil, ...)
+  and raised FrozenError, making all four dead. The Ruby nodes create the hash
+  on first write.
 * Requires Ruby >= 3.3 (3.2 reached EOL 2026-03-31). JRuby is supported by
   the same code.
 ```
