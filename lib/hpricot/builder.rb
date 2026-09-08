@@ -1,6 +1,5 @@
 require 'hpricot/tags'
 require 'fast_xs'
-require 'hpricot/blankslate'
 require 'hpricot/htmlinfo'
 
 module Hpricot
@@ -216,7 +215,7 @@ module Hpricot
   # against the CssProxy object are added as element classes or IDs.
   #
   # See the README for examples.
-  class CssProxy < BlankSlate
+  class CssProxy < BasicObject
 
     # Creates a CssProxy object.
     def initialize(builder, sym)
