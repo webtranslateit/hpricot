@@ -84,4 +84,106 @@ class TestTreeBuilder < Test::Unit::TestCase
     src = %(<?xml version="1.0"?>\n<r a="1">\n  <s>x&#8230;&quot;y</s>\n</r>\n)
     assert_equal src, build(src, xml: true).to_original_html
   end
+
+  # --- Task 7: HTML implicit closing --------------------------------------
+
+  def test_li_implicitly_closes_li
+    doc = build('<ul><li>a<li>b</ul>')
+    ul = doc.children[0]
+    assert_equal 2, ul.children.count { |c| c.is_a?(Hpricot::Elem) && c.name == 'li' }
+    assert_equal ['li', 'li'], ul.children.select { |c| c.is_a?(Hpricot::Elem) }.map(&:name)
+  end
+
+  def test_p_implicitly_closes_p
+    doc = build('<div><p>a<p>b</div>')
+    div = doc.children[0]
+    assert_equal 2, div.children.count { |c| c.is_a?(Hpricot::Elem) && c.name == 'p' }
+  end
+
+  def test_html_mode_downcases_tag_names
+    doc = build('<DIV><SPAN>x</SPAN></DIV>')
+    assert_equal 'div', doc.children[0].name
+  end
+
+  def test_nested_tags_still_nest
+    doc = build('<div><span>x</span></div>')
+    div = doc.children[0]
+    assert_equal 'span', div.children[0].name
+  end
+
+  # --- Additional HTML implicit-close cases, verified against the C scanner
+  # (ruby -Ilib -Iext/hpricot_scan -Iext/fast_xs -e '...') per the task's
+  # explicit request to validate close_implied against the real
+  # implementation rather than the plan's simplified sketch.
+
+  def test_td_implicitly_closes_td_across_a_tr
+    doc = build('<table><tr><td>a<td>b</tr></table>')
+    tr = doc.children[0].children[0]
+    assert_equal ['td', 'td'], tr.children.select { |c| c.is_a?(Hpricot::Elem) }.map(&:name)
+  end
+
+  # <p> does not exclude <div> nor does it list it as allowed content, so an
+  # unmatched key produces "no opinion" and the walk falls back to the
+  # current focus: the C scanner nests <div> INSIDE <p> rather than closing
+  # it. (Real browsers close <p> before a block-level child, but hpricot's
+  # ElementContent-driven algorithm does not encode that rule for <div>.)
+  def test_div_nests_inside_p_rather_than_closing_it
+    doc = build('<p><div>x</div></p>')
+    p = doc.children[0]
+    assert_equal 'p', p.name
+    assert_equal 'div', p.children[0].name
+  end
+
+  # <b> permits <i> (true), so <i> nests inside <b> without closing it, and
+  # the mismatched </b> then closes both (the C scanner's O(n) tag search
+  # matches the nearest open <b> and drops everything above it, giving the
+  # </i> an unmatched close tag of its own -- it becomes a BogusETag).
+  def test_mismatched_end_tags_close_the_open_ancestor_and_its_descendants
+    doc = build('<b><i>x</b></i>')
+    b = doc.children[0]
+    assert_equal 'b', b.name
+    assert_equal 'i', b.children[0].name
+    assert_kind_of Hpricot::BogusETag, doc.children[1]
+  end
+
+  def test_unmatched_end_tag_becomes_bogus_etag_in_html_mode
+    doc = build('<div>text</q>after</div>')
+    div = doc.children[0]
+    assert_include div.children.map(&:class), Hpricot::BogusETag
+  end
+
+  # <a> excludes nested <a> (ElementExclusions), so a second <a> closes the
+  # first and becomes its sibling.
+  def test_a_implicitly_closes_a
+    doc = build('<div><a>one<a>two</a></a></div>')
+    div = doc.children[0]
+    as = div.children.select { |c| c.is_a?(Hpricot::Elem) && c.name == 'a' }
+    assert_equal 2, as.length
+  end
+
+  # Verified against the C scanner (button excludes "a" -- ElementExclusions
+  # -- while span's content model allows it): the walk must consider the
+  # *entire* ancestor chain, not just the nearest ancestor with an opinion.
+  # <span> alone would permit the second <a> to close the first and become
+  # its sibling, but the outer <button>'s exclusion of <a> cancels that
+  # permission, so the C scanner nests the second <a> straight inside the
+  # first with no implicit close at all.
+  def test_an_outer_ancestors_exclusion_overrides_a_closer_ancestors_inclusion
+    doc = build('<button><span><a>text<a>text2</a></a></span></button>')
+    span = doc.children[0].children[0]
+    assert_equal 'a', span.children[0].name
+    inner_a = span.children[0].children.find { |c| c.is_a?(Hpricot::Elem) }
+    assert_equal 'a', inner_a.name
+  end
+
+  # XML mode must never apply implicit closing, even for names that collide
+  # with HTML's implicit-close tags.
+  def test_xml_mode_does_not_implicitly_close
+    doc = build('<ul><li>a<li>b</li></li></ul>', xml: true)
+    ul = doc.children[0]
+    li1 = ul.children[0]
+    assert_equal 'li', li1.name
+    li2 = li1.children.find { |c| c.is_a?(Hpricot::Elem) }
+    assert_equal 'li', li2.name
+  end
 end
