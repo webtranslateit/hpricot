@@ -34,6 +34,27 @@ module Hpricot
       # so it keeps @src's own encoding rather than being forced binary.
       @scan_src = source.dup.force_encoding(Encoding::ASCII_8BIT)
       @ss = StringScanner.new(@scan_src)
+
+      # Which encoding the token strings carry.
+      #
+      # A BINARY source carries no information about what its bytes mean --
+      # it is what File.binread and Zip::File#read hand back -- so tag the
+      # output Encoding.default_external, which is what the C scanner did for
+      # every input. Callers rely on this: language_file_handler reads .docx
+      # parts out of a zip (binary) and passes the result straight to
+      # HTMLEntities#decode, which raises on an ASCII-8BIT string.
+      #
+      # A source that declares a real encoding is believed, which is where
+      # this departs from the C scanner. That tagged every node
+      # default_external regardless, so parsing an ISO-8859-1 document
+      # produced UTF-8-labelled strings that failed valid_encoding?.
+      @out_encoding =
+        if source.encoding == Encoding::ASCII_8BIT
+          Encoding.default_external
+        else
+          source.encoding
+        end
+      @src = @src.dup.force_encoding(@out_encoding) if @src.encoding != @out_encoding
     end
 
     def tokens
@@ -46,13 +67,22 @@ module Hpricot
 
     private
 
+    LT = 0x3C # '<'
+
     def next_token
       start = @ss.pos
 
-      if @ss.scan(/<!--/)      then comment(start)
-      elsif @ss.scan(/<!\[CDATA\[/) then cdata(start)
-      elsif @ss.scan(/<\?/)    then procins(start)
-      elsif @ss.scan(/<!DOCTYPE/) then doctype(start) # case-sensitive: the
+      # Fast path: a token that does not begin with '<' can only be text, so
+      # skip the four construct probes below. Most tokens in a real document
+      # are text, and getbyte avoids allocating to find that out.
+      return text(start) unless @scan_src.getbyte(start) == LT
+
+      # skip rather than scan throughout: the matched text is discarded here,
+      # and scan would allocate a String for it every time.
+      if @ss.skip(/<!--/)      then comment(start)
+      elsif @ss.skip(/<!\[CDATA\[/) then cdata(start)
+      elsif @ss.skip(/<\?/)    then procins(start)
+      elsif @ss.skip(/<!DOCTYPE/) then doctype(start) # case-sensitive: the
         # ragel grammar matches literal uppercase DOCTYPE only, so
         # '<!doctype html>' is text. Verified against the C scanner.
       elsif (m = @ss.scan(%r{</([^\s>]*)\s*>?}))
@@ -138,9 +168,9 @@ module Hpricot
 
     def text(start)
       # Consume one '<' that did not start a recognised construct, then run to
-      # the next '<'. This is what makes stray '<' render as text.
-      @ss.getch if @ss.check(/</)
-      @ss.scan(/[^<]*/m)
+      # the next '<'. This is what makes a stray '<' render as text. One skip
+      # does the job of check + getch + scan, and allocates nothing.
+      @ss.skip(/<?[^<]*/m)
       Token.new(:text, nil, nil, nil, span(start), nil)
     end
 
@@ -174,31 +204,34 @@ module Hpricot
     NAME_RE = /[A-Za-z_:][\-A-Za-z0-9._:?]*/
 
     def tag(start)
-      @ss.getch                       # consume '<'
+      @ss.pos += 1                    # consume '<' without allocating
       name_start = @ss.pos
-      @ss.scan(NAME_RE)
+      # skip, not scan: scan allocates the matched String only for it to be
+      # discarded, because the visible value is re-sliced from @src by `span`
+      # to keep the source encoding. Same below, six times per tag.
+      @ss.skip(NAME_RE)
       name = span(name_start, @ss.pos - name_start)
       attrs = {}
 
       loop do
-        @ss.scan(/\s+/)
+        @ss.skip(/\s+/)
         return text_from(start) if @ss.eos?   # no '>' before EOF
         break if @ss.check(%r{/?>})
 
         key_start = @ss.pos
-        return text_from(start) if @ss.scan(ATTR_NAME_RE).nil?
+        return text_from(start) if @ss.skip(ATTR_NAME_RE).nil?
 
         key = span(key_start, @ss.pos - key_start)
 
         val = nil
-        if @ss.scan(/\s*=\s*/)
+        if @ss.skip(/\s*=\s*/)
           val = if @ss.check(/["']/)
                   q_start = @ss.pos
-                  quoted = @ss.scan(/"[^"]*"|'[^']*'/)
+                  quoted_len = @ss.skip(/"[^"]*"|'[^']*'/)
                   # An opening quote with no closing quote never terminates.
-                  return text_from(start) if quoted.nil?
+                  return text_from(start) if quoted_len.nil?
 
-                  span(q_start + 1, quoted.bytesize - 2)
+                  span(q_start + 1, quoted_len - 2)
                 else
                   # hpricot_common.rl:23's UnqAttr can only START with a
                   # non-quote character, but its body tolerates a quote
@@ -206,7 +239,7 @@ module Hpricot
                   # one trailing quote, so "class=xyz'" parses as "xyz" (a
                   # stray closing quote someone forgot to open).
                   v_start = @ss.pos
-                  @ss.scan(%r{[^\s>]*})
+                  @ss.skip(%r{[^\s>]*})
                   unq = span(v_start, @ss.pos - v_start)
                   unq = unq[0...-1] if unq.end_with?('"', "'")
                   # A completely empty, unquoted value (name= immediately
@@ -221,8 +254,8 @@ module Hpricot
         attrs[key] = val
       end
 
-      empty = !@ss.scan(%r{\s*/>}).nil?
-      @ss.scan(/\s*>/) unless empty
+      empty = !@ss.skip(%r{\s*/>}).nil?
+      @ss.skip(/\s*>/) unless empty
 
       Token.new(empty ? :emptytag : :stag,
                 @xml ? name : downcase(name),

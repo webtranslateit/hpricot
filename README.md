@@ -84,20 +84,51 @@ several runs.
 
 | Input | C/ragel scanner | pure Ruby | ratio |
 |---|---|---|---|
-| 26 KB | 0.4 ms | 2.7 ms | 6.8x |
-| 186 KB | 3.7 ms | 26.7 ms | 7.2x |
-| 1.5 MB | 37.5 ms | 252.6 ms | 6.7x |
-| 5 MB | 161.3 ms | 847.0 ms | 5.3x |
+| 26 KB | 0.4 ms | 2.2 ms | 5.5x |
+| 186 KB | 4.2 ms | 22.5 ms | 5.4x |
+| 1.5 MB | 44.1 ms | 199.2 ms | 4.5x |
+| 5 MB | 181.4 ms | 667.6 ms | 3.7x |
 
-Both are linear in input size. The Ruby scanner is 5-7x slower in absolute
-terms, which was an accepted trade: parsing is under half the cost of even
+Both are linear in input size; the ratio narrows on larger inputs because the
+per-token overhead amortises. The Ruby scanner is 4-5x slower in absolute terms,
+which was an accepted trade: parsing is under half the cost of even
 parse-plus-extract, before any encoding detection, entity decoding or database
 work, so it is not the bottleneck in any real pipeline. A 5 MB document — far
 above typical — parses in well under a second.
 
-The hot loop stays inside `StringScanner#scan`, whose matching is C. A
-character-by-character Ruby loop would be an order of magnitude slower, so that
-is a design constraint rather than an implementation detail.
+Scanning is ~80% of parse time and the tree build the remaining ~20%, so the
+scanner is where any further tuning belongs. Two things got it from an initial
+5-7x down to 4-5x, both by removing allocations rather than changing algorithms:
+dispatching on the first byte so a text token does not attempt four construct
+regexes first, and using `StringScanner#skip` in place of `#scan` wherever the
+matched text is discarded — `scan` allocates a String for the match even when
+the caller only needs to know it succeeded, which happened six times per tag.
+That took allocations from 6.3 to 4.8 per token.
+
+### "Pure Ruby" — what that does and does not mean
+
+The hot loop runs inside `StringScanner#scan`, and `strscan` is implemented in C
+in CRuby. So C still executes; what changed is *whose* C it is.
+
+What was removed is this project's own native code: roughly 7,000 lines of
+ragel-generated C plus a hand-written scanner, a parallel Java implementation
+for JRuby, and `fast_xs`. That code had no upstream maintainer after 2013, could
+not be regenerated without ragel (which nobody had installed), had to be
+recompiled for every Ruby and platform, and had been hand-patched in the
+generated output. A review of it found an uninitialised read, two reachable
+segfaults, an unbounded leak and GC roots registered on dead stack frames. It
+also stopped compiling on Ruby trunk.
+
+`strscan` is a different proposition: it ships with Ruby, is maintained and
+fuzzed by ruby-core, gets security fixes without us doing anything, and has an
+implementation on every engine — which is why JRuby now works from the same
+source with no Java of ours.
+
+So the accurate claim is **no native extension of our own**: nothing is
+compiled at install time, there is no `extensions` entry in the gemspec, no
+ragel, and no platform-specific builds. A character-by-character Ruby loop
+would be an order of magnitude slower than `StringScanner`, so keeping the hot
+loop inside it is a deliberate design constraint.
 
 ## Contributing
 
