@@ -14,6 +14,10 @@ pkg
 .DS_Store
 tmp
 Gemfile.lock
+*.gem
+*.dSYM/
+ext/**/Makefile
+*.tmp
 
 /test/corpus/*
 !/test/corpus/.gitkeep
