@@ -35,12 +35,19 @@ class TestComplexity < Test::Unit::TestCase
   # the machine, which is the failure mode being guarded against here.
   SAMPLES = 3
 
-  def assert_subquadratic(label, xml: false, &generate)
-    small = SAMPLES.times.map { time(generate.call(SMALL), xml: xml) }.min
-    large = SAMPLES.times.map { time(generate.call(LARGE), xml: xml) }.min
+  # +small+/+large+ override the default sizes. Shapes that blow up steeply
+  # need smaller inputs, or a quadratic run takes minutes to fail instead of
+  # seconds -- a guard nobody will wait for is a guard nobody will keep.
+  def assert_subquadratic(label, xml: false, small: SMALL, large: LARGE, &generate)
+    small_t = SAMPLES.times.map { time(generate.call(small), xml: xml) }.min
+    large_t = SAMPLES.times.map { time(generate.call(large), xml: xml) }.min
 
     # If even the large case is trivially fast, the ratio is measuring noise.
-    return if large < 0.02
+    # CPU time is stable enough for a lower floor than wall clock would need.
+    return if large_t < 0.005
+
+    small = small_t
+    large = large_t
 
     ratio = large / small
     assert_operator ratio, :<, MAX_RATIO,
@@ -52,10 +59,15 @@ class TestComplexity < Test::Unit::TestCase
   # Monotonic clock rather than Benchmark.realtime: benchmark stopped being a
   # default gem in Ruby 4.0, so requiring it fails under bundle exec unless it
   # is declared as a dependency, and a timing helper is not worth one.
+  # CPU time, not wall clock. `min` over samples does not rescue a wall-clock
+  # measurement when the two sizes see different contention -- on a loaded
+  # machine a linear case measured a 3.82 ratio, a failure, because the small
+  # side happened to get an uncontended slot. Under the same load CPU time gave
+  # 2.37, restoring the margin this file assumes.
   def time(src, xml:)
-    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    started = Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID)
     xml ? Hpricot::XML(src) : Hpricot.parse(src)
-    Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) - started
   end
 
   # Unquoted attribute values must not swallow '<'. When they did, the
@@ -95,5 +107,33 @@ class TestComplexity < Test::Unit::TestCase
   # The case where the override genuinely applies to the tag being opened.
   def test_repeated_excluded_tag_inside_an_overriding_tag_is_linear
     assert_subquadratic('a in button') { |n| "<button>#{'<a>x' * n}" }
+  end
+
+  # doctype and procins scan forward for a terminator that may not exist. When
+  # they bailed by rewinding to the construct's start, the whole tail was
+  # rescanned once per construct. These two shapes were quadratic on master --
+  # 1MB of the first took 264 seconds -- and shipped precisely because this
+  # file guarded only attribute, text and tree-builder shapes.
+  def test_doctype_without_a_terminator_is_linear
+    assert_subquadratic('doctype, no terminator', xml: true, small: 8_000, large: 16_000) { |n| '<!DOCTYPE h SYSTEM "' * n }
+  end
+
+  def test_doctype_with_an_unclosed_internal_subset_is_linear
+    assert_subquadratic('doctype, unclosed subset', xml: true, small: 8_000, large: 16_000) { |n| '<!DOCTYPE h [' * n }
+  end
+
+  # This one parses successfully, so it is not only the failure path that was
+  # affected.
+  def test_doctype_with_a_subset_and_a_terminator_is_linear
+    assert_subquadratic('doctype, subset + >', xml: true, small: 8_000, large: 16_000) { |n| '<!DOCTYPE h [>' * n }
+  end
+
+  def test_unterminated_processing_instruction_is_linear
+    assert_subquadratic('unterminated PI', xml: true, small: 8_000, large: 16_000) { |n| '<?x ' * n }
+  end
+
+  # The shape a truncated PHP upload takes.
+  def test_unterminated_php_instruction_is_linear
+    assert_subquadratic('unterminated <?php', xml: true, small: 8_000, large: 16_000) { |n| '<?php ' * n }
   end
 end
