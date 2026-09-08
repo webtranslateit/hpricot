@@ -85,7 +85,12 @@ module Hpricot
       elsif @ss.skip(/<!DOCTYPE/) then doctype(start) # case-sensitive: the
         # ragel grammar matches literal uppercase DOCTYPE only, so
         # '<!doctype html>' is text. Verified against the C scanner.
-      elsif (m = @ss.scan(%r{</([^\s>]*)\s*>?}))
+      elsif (m = @ss.scan(%r{</(#{NAME_RE.source})\s*>}o))
+        # hpricot_common.rl:32: EndTag = "</" NameCap space* ">". Both a valid
+        # Name and the closing '>' are required; "</>", "</ >" and an
+        # unterminated "</x" are text, as they are to the C scanner. Accepting
+        # them produced a BogusETag, and BogusETag#output emits nothing, so
+        # to_html silently dropped those bytes.
         name = span(start + 2, @ss[1].bytesize)
         # hpricot_scan.rl:317-324 downcases stag/emptytag/etag names alike in
         # HTML mode (it is the same lookup used to find the tag's content
@@ -128,9 +133,22 @@ module Hpricot
       # drops the character right before '>', and fabricates a "?>" in
       # raw_string that was never in the source); this port keeps every byte
       # instead, per this project's round-tripping requirement.
+      # hpricot_common.rl:46-47:
+      #   StartXmlProcIns = "<?" Name space+
+      #   EndXmlProcIns   = "?"? ">"
+      # A terminator is required. An unterminated "<?x" or "<?xml version='1.0'"
+      # is text, as it is to the C scanner. Accepting it produced a ProcIns or
+      # XMLDecl whose to_html fabricated a "?>" that was never in the source.
+      # hpricot_common.rl:46 requires whitespace after the Name:
+      #   StartXmlProcIns = "<?" Name space+
+      # so "<?x?>" and "<?x>" are text, not processing instructions. Verified
+      # against the C scanner.
+      return text_from(start) unless @scan_src.byteslice(body_start..) =~ /\A#{NAME_RE.source}\s/o
+
       found = @ss.scan_until(/\??>/)
-      term_len = found ? @ss.matched.bytesize : 0
-      @ss.scan(/.*/m) unless found
+      return text_from(start) unless found
+
+      term_len = @ss.matched.bytesize
       body_end = @ss.pos - term_len
       # Find target/rest boundaries against the binary buffer (safe
       # regardless of @src's declared encoding), then slice @src itself so
@@ -138,9 +156,11 @@ module Hpricot
       bin_body = @scan_src.byteslice(body_start, body_end - body_start)
       target_len = bin_body[/\A\S*/].bytesize
       remainder = bin_body.byteslice(target_len..)
+      # Only the leading separator is consumed; trailing whitespace belongs to
+      # the content. The C scanner stores "echo 1; " for "<?php echo 1; ?>",
+      # and stripping it changed what to_html emitted.
       lead_ws = remainder[/\A\s*/].bytesize
-      trail_ws = remainder[/\s*\z/].bytesize
-      rest_len = [remainder.bytesize - lead_ws - trail_ws, 0].max
+      rest_len = [remainder.bytesize - lead_ws, 0].max
 
       target = span(body_start, target_len)
       rest = span(body_start + target_len + lead_ws, rest_len)
@@ -160,8 +180,26 @@ module Hpricot
       end
     end
 
+    # hpricot_common.rl:45:
+    #   DocType = "<!DOCTYPE" space+ NameCap (space+ ExternalID)? space*
+    #             ("[" [^\]]* "]" space*)? ">"
+    #
+    # Whitespace, a Name and a closing '>' are all required, and an internal
+    # subset in brackets is skipped WHOLE -- it contains '>' characters of its
+    # own, so stopping at the first one truncated the doctype and leaked the
+    # trailing "]>" into the document as a text node. Internal subsets appear
+    # in real XLIFF and TMX files.
+    #
+    # Anything not matching is text, as it is to the C scanner. Accepting a
+    # bare "<!DOCTYPE" produced a DocType with no target, and DocType#output
+    # then fabricated "<!DOCTYPE  SYSTEM>" out of nothing.
     def doctype(start)
-      @ss.scan_until(/>/) || @ss.scan(/.*/m)
+      return text_from(start) unless @ss.skip(/\s+#{NAME_RE.source}/o)
+
+      @ss.skip(/[^>\[]*/)          # external identifiers, if any
+      @ss.skip(/\[[^\]]*\]\s*/)     # internal subset, if any
+      return text_from(start) unless @ss.skip(/[^>]*>/)
+
       raw = span(start)
       Token.new(:doctype, nil, parse_doctype(raw), nil, raw, nil)
     end

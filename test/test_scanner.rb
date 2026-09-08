@@ -200,4 +200,48 @@ class TestScanner < Test::Unit::TestCase
                  scan('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" ' \
                       '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">')[0].attrs)
   end
+
+  # Constructs that must NOT be recognised, because the grammar requires more
+  # than the opening delimiter. Each of these was accepted at some point during
+  # the port, and each produced a node whose to_html either deleted the source
+  # bytes or invented ones that were never there. All verified against the C
+  # scanner.
+  def test_malformed_constructs_are_text
+    {
+      # hpricot_common.rl:32 EndTag = "</" NameCap space* ">"
+      '</>'                   => 'empty end-tag name',
+      '</ >'                  => 'end tag with no name',
+      '</x'                   => 'end tag with no closing >',
+      # hpricot_common.rl:45 DocType requires space, a Name and a ">"
+      '<!DOCTYPE'             => 'doctype with nothing after it',
+      '<!DOCTYPE html'        => 'doctype with no closing >',
+      '<!DOCTYPEhtml>'        => 'doctype with no space before the name',
+      # hpricot_common.rl:46 StartXmlProcIns = "<?" Name space+
+      '<?x?>'                 => 'PI with no space after the name',
+      '<?x>'                  => 'PI with no space and a bare terminator',
+      '<?x'                   => 'PI with no terminator',
+      '<?xml version="1.0"'   => 'XML declaration with no terminator'
+    }.each do |src, why|
+      toks = scan(src, xml: true)
+      assert_equal %i[text], toks.map(&:kind).uniq, "#{src.inspect} (#{why}) should be text"
+      assert_equal src, toks.map(&:raw).join, "#{src.inspect} must still round-trip"
+    end
+  end
+
+  # An internal DTD subset contains '>' characters of its own, so the doctype
+  # cannot simply stop at the first one.
+  def test_doctype_internal_subset_is_consumed_whole
+    src = %(<!DOCTYPE n [<!ENTITY x "y">]><n>z</n>)
+    toks = scan(src, xml: true)
+    assert_equal :doctype, toks[0].kind
+    assert_equal '<!DOCTYPE n [<!ENTITY x "y">]>', toks[0].raw
+    assert_equal src, toks.map(&:raw).join
+  end
+
+  # Trailing whitespace belongs to a PI's content: the C scanner stores
+  # "echo 1; " for "<?php echo 1; ?>", and to_html re-emits it.
+  def test_procins_keeps_trailing_whitespace_in_content
+    assert_equal 'echo 1; ', scan('<?php echo 1; ?>', xml: true)[0].content
+    assert_equal 'a  ',      scan('<?x  a  ?>', xml: true)[0].content
+  end
 end
