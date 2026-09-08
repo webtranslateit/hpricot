@@ -1,17 +1,35 @@
 Gem::Specification.new do |s|
-  s.name = %q{webtranslateit-hpricot}
-  s.version = "0.10.0"
+  s.name = 'webtranslateit-hpricot'
+  s.version = '1.0.0'
 
-  s.authors = ["why the lucky stiff"]
-  s.date = %q{2024-03-24}
-  s.description = %q{a swift, liberal HTML parser with a fantastic library}
-  s.email = %q{why@ruby-lang.org}
-  s.license = "MIT"
-  s.extensions = ["ext/fast_xs/extconf.rb", "ext/hpricot_scan/extconf.rb"]
-  s.extra_rdoc_files = ["README.md", "CHANGELOG", "COPYING"]
-  s.files = %w(.gitignore CHANGELOG COPYING README.md Rakefile ext/fast_xs/FastXsService.java ext/fast_xs/extconf.rb ext/fast_xs/fast_xs.c ext/hpricot_scan/HpricotCss.java ext/hpricot_scan/HpricotScanService.java ext/hpricot_scan/MANIFEST ext/hpricot_scan/extconf.rb ext/hpricot_scan/hpricot_common.rl ext/hpricot_scan/hpricot_css.c ext/hpricot_scan/hpricot_css.java.rl ext/hpricot_scan/hpricot_css.rl ext/hpricot_scan/hpricot_scan.c ext/hpricot_scan/hpricot_scan.h ext/hpricot_scan/hpricot_scan.java.rl ext/hpricot_scan/hpricot_scan.rl extras/hpricot.png hpricot.gemspec lib/hpricot.rb lib/hpricot/blankslate.rb lib/hpricot/builder.rb lib/hpricot/elements.rb lib/hpricot/htmlinfo.rb lib/hpricot/inspect.rb lib/hpricot/modules.rb lib/hpricot/parse.rb lib/hpricot/tag.rb lib/hpricot/tags.rb lib/hpricot/traverse.rb lib/hpricot/xchar.rb setup.rb test/files/basic.xhtml test/files/boingboing.html test/files/cy0.html test/files/immob.html test/files/pace_application.html test/files/tenderlove.html test/files/uswebgen.html test/files/utf8.html test/files/week9.html test/files/why.xml test/load_files.rb test/nokogiri-bench.rb test/test_alter.rb test/test_builder.rb test/test_parser.rb test/test_paths.rb test/test_preserved.rb test/test_xml.rb)
-  s.homepage = %q{http://wiki.github.com/hpricot/hpricot}
-  s.rdoc_options = ["--quiet", "--title", "The Hpricot Reference", "--main", "README", "--inline-source"]
-  s.require_paths = ["lib"]
-  s.summary = %q{a swift, liberal HTML parser with a fantastic library}
+  s.authors = ['why the lucky stiff', 'WebTranslateIt']
+  s.email = 'support@webtranslateit.com'
+  s.summary = 'A liberal HTML/XML parser with byte-identical round-tripping'
+  s.description = <<~DESC
+    A maintained fork of why the lucky stiff's hpricot. Parses malformed markup
+    liberally and preserves the exact source bytes of anything it did not
+    modify, so numeric character references, entity spellings and attribute
+    order all survive a parse/serialize round trip. Pure Ruby, no native
+    extension.
+  DESC
+  s.homepage = 'https://github.com/webtranslateit/hpricot'
+  s.license = 'MIT'
+
+  s.required_ruby_version = '>= 3.3'
+  s.require_paths = ['lib']
+  s.extra_rdoc_files = ['README.md', 'CHANGELOG', 'COPYING']
+
+  s.files = `git ls-files -z`.split("\x0").reject do |f|
+    f.start_with?('docs/', 'test/', '.github/') || f == '.gitignore'
+  end
+
+  s.metadata = {
+    'source_code_uri' => 'https://github.com/webtranslateit/hpricot',
+    'bug_tracker_uri' => 'https://github.com/webtranslateit/hpricot/issues',
+    'changelog_uri' => 'https://github.com/webtranslateit/hpricot/blob/master/CHANGELOG',
+    'rubygems_mfa_required' => 'true'
+  }
+
+  s.add_development_dependency 'rake', '>= 13.0'
+  s.add_development_dependency 'test-unit', '~> 3.7'
 end

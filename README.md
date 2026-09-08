@@ -76,6 +76,29 @@ gem 'webtranslateit-hpricot'
 The API is hpricot's — `require 'hpricot'` and everything below applies
 unchanged.
 
+## Performance
+
+Measured on Ruby 4.0.6, arm64-darwin, parsing a real Android `strings.xml`
+fixture scaled up by repeating its `<string>` elements. `Hpricot::XML`, mean of
+several runs.
+
+| Input | C/ragel scanner | pure Ruby | ratio |
+|---|---|---|---|
+| 26 KB | 0.4 ms | 2.7 ms | 6.8x |
+| 186 KB | 3.7 ms | 26.7 ms | 7.2x |
+| 1.5 MB | 37.5 ms | 252.6 ms | 6.7x |
+| 5 MB | 161.3 ms | 847.0 ms | 5.3x |
+
+Both are linear in input size. The Ruby scanner is 5-7x slower in absolute
+terms, which was an accepted trade: parsing is under half the cost of even
+parse-plus-extract, before any encoding detection, entity decoding or database
+work, so it is not the bottleneck in any real pipeline. A 5 MB document — far
+above typical — parses in well under a second.
+
+The hot loop stays inside `StringScanner#scan`, whose matching is C. A
+character-by-character Ruby loop would be an order of magnitude slower, so that
+is a design constraint rather than an implementation detail.
+
 ## Contributing
 
 Issues and pull requests are welcome, though be aware this fork is maintained
