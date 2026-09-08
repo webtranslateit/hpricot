@@ -1,20 +1,92 @@
-# Hpricot is over.
+# webtranslateit-hpricot
 
-After years of lack of a proper maintainer for one of why's jewels, it has been
-decided to finally close the book on hpricot. Most users have migrated to alternatives
-and there is simply no time or energy to continue with the current codebase.
+A maintained fork of [hpricot](https://github.com/hpricot/hpricot), _why the
+lucky stiff's HTML/XML parser. Upstream was declared over in 2013; this fork
+exists because [WebTranslateIt](https://webtranslateit.com) still depends on it
+and intends to keep it working.
 
-If you feel that you have the time and wish to take it over, I suggest you instead
-think about making the hpricot-like API within nokogiri 100% compatible, that is a better
-use of your time.
+## Why this fork exists
 
-But if you still feel like "No damnit, I wanna work on hpricot itself still!" then fork
-this repo and start work. Send @evanphx or @nicksieger a message if you feel like you
-want to take over the gem name with new releases under the hpricot name.
+We parse translation and localisation files — `.resx`, `.xml`, `.ts`, `.tbx`,
+`.stringsdict`, `.xtb`, `.docx`, and a dozen more — and hand them back to
+customers after editing. That imposes a requirement most parsers do not meet:
+
+**Byte-identical round-tripping.** If a customer's file writes `&#8230;` we must
+give back `&#8230;`, not `…`. If it writes `&quot;` we must give back `&quot;`,
+not `"`. If it orders attributes a certain way, that order must survive. A
+translation tool that silently reformats the untouched 99% of a file is worse
+than useless — it turns every export into an unreviewable diff.
+
+We measured the alternatives against a real corpus:
+
+| Parser | Preserves `&#8230;` | Preserves `&quot;` | Preserves attribute order | Byte-identical |
+|---|---|---|---|---|
+| hpricot | yes | yes | yes | **yes** |
+| Nokogiri | only via `encoding: 'US-ASCII'`, all-or-nothing | no | yes | no |
+| Oga | no | no | yes | no |
+| REXML (`raw: :all`) | yes | yes | **no** | no |
+
+Hpricot manages this because it does not decode. It records the source byte span
+of every node and emits those bytes verbatim for anything you did not modify.
+Fidelity is a property of *not* re-encoding, and re-encoding is exactly what a
+conformant serializer must do.
+
+The second requirement is **liberality**. Hpricot accepts malformed markup that
+a conformant parser rejects. Real uploaded files are frequently malformed, and
+"your file is invalid" is not an acceptable answer when the previous version of
+the product accepted it. A prior attempt to move to REXML foundered on precisely
+this — it correctly rejected files hpricot tolerated.
+
+Hpricot is also the fastest of the four we measured (~1.6x Nokogiri), though
+that is the least important reason: parsing is well under half the cost of a
+typical import job.
+
+## Current state
+
+The library works and is in production. The Ruby layer is actively maintained.
+
+**The C extension is being replaced with pure Ruby.** The scanner is a
+ragel-generated C state machine that has had no upstream maintenance since 2013,
+and a review turned up several memory-safety defects: an uninitialised read that
+makes HTML-mode parsing non-deterministic across processes, two reachable
+segfaults, an unbounded leak on parse errors, and GC roots registered against
+dead stack frames. It also no longer compiles on Ruby trunk.
+
+Since parsing is not the bottleneck, there is no reason to keep hand-patched C
+in a library that consumes untrusted input. A pure-Ruby scanner eliminates that
+entire class of defect by construction, removes the parallel Java implementation
+maintained for JRuby, and means no native extension to rebuild on every Ruby
+release. The plan is in
+[`docs/superpowers/plans/`](docs/superpowers/plans/2026-09-08-pure-ruby-scanner.md).
+
+Byte-identical round-tripping and liberality are the acceptance criteria for
+that work, verified by a differential harness that compares the new scanner
+against the old C one on a corpus of real files.
+
+## Installing
+
+    $ gem install webtranslateit-hpricot
+
+Or in a Gemfile:
+
+```ruby
+gem 'webtranslateit-hpricot'
+```
+
+The API is hpricot's — `require 'hpricot'` and everything below applies
+unchanged.
+
+## Contributing
+
+Issues and pull requests are welcome, though be aware this fork is maintained
+for a specific purpose and changes are weighed against that. If you want a
+general-purpose HTML parser, use
+[Nokogiri](https://github.com/sparklemotion/nokogiri) — it is better maintained,
+standards-compliant, and almost certainly what you want.
 
 Thanks to \_why for all the fun. We'll never forget it.
 
-## Now back to your original README content...
+---
 
 
 # Hpricot, Read Any HTML
@@ -61,13 +133,6 @@ If you have any trouble, don't hesitate to contact the author.  As always, I'm
 not going to say "Use at your own risk" because I don't want this library to be
 risky.  If you trip on something, I'll share the liability by repairing things
 as quickly as I can.  Your responsibility is to report the inadequacies.
-
-## Installing Hpricot
-
-You may get the latest stable version from Rubyforge. Win32 binaries,
-Java binaries (for JRuby), and source gems are available.
-
-    $ gem install hpricot
 
 ## An Hpricot Showcase
 
