@@ -1,3 +1,84 @@
+= 1.0.0
+=== 8 September 2026
+
+This release replaces the C extension with pure Ruby. No native code is
+compiled at install time and ragel is no longer needed to build or contribute.
+
+Breaking changes
+* Requires Ruby >= 3.3. Ruby 3.2 reached end of life on 31 March 2026.
+* Hpricot.scan no longer accepts a block. The block form dereferenced a NULL
+  state pointer and segfaulted on any tag carrying an attribute; it had no
+  known callers.
+* Hpricot.css is removed. Its scanner dropped the last token of every selector,
+  so "div" matched nothing and "#id.cls" silently lost ".cls". Elements#search
+  has always used the Ruby implementation in elements.rb and is unaffected.
+* Node strings now carry the source document's encoding when it declares one,
+  rather than always Encoding.default_external. A binary source (File.binread,
+  Zip::File#read) is still tagged default_external, since its bytes carry no
+  encoding information and callers depend on that. Previously a Latin-1
+  document produced UTF-8-labelled strings that failed valid_encoding?. One
+  consequence: concatenating to_html output from documents of DIFFERENT
+  encodings now raises Encoding::CompatibilityError, where before every result
+  was default_external and always concatenated.
+* html_quote escapes an attribute quote as &quot; rather than a backslash.
+  HTML does not honour backslash escaping inside an attribute value, so the old
+  output did not re-parse as the same element -- <span style="font-family:\"MS
+  Mincho\""> came back as a text node and a bogus end tag -- and a quote in an
+  attribute became an injection point. to_html output therefore differs from
+  0.10.0 for any attribute value containing a literal quote.
+* Hpricot.uxs no longer raises on hostile entity references. &#99999999999;
+  raised RangeError, &#xD800; produced invalid UTF-8, &#0; emitted a NUL byte,
+  and any non-UTF-8 input raised Encoding::CompatibilityError. Out-of-range,
+  surrogate and XML-invalid codepoints now become "?".
+* BlankSlate is removed and Builder::CssProxy inherits from BasicObject.
+  BlankSlate hid nothing (its guard compared Symbols against a String, dead
+  since Ruby 1.9), installed an Object.method_added hook that fired for every
+  method definition anywhere in the host process, leaked method_added as a
+  public method on every class, and raised SystemStackError if loaded twice.
+
+Fixes
+* Parsing is deterministic. The C scanner read uninitialised memory in its
+  HTML-mode implicit-close path, so the same bytes could produce different
+  trees from one process to the next -- 20 runs of the test suite produced five
+  distinct outcomes.
+* Two reachable segfaults are gone: Hpricot.scan with a block on any tag with
+  an attribute, and IO input whose length is an exact multiple of 16384 bytes
+  (or any reader returning nil).
+* An unbounded leak is gone. Every exception path leaked the parser state plus
+  a permanently registered GC root: roughly 1.4KB retained per call, reachable
+  from any document containing an unknown encoding in its XML declaration.
+* An unknown encoding in an XML declaration no longer raises EncodingError.
+* Malformed input parses in linear time. Unquoted attribute values swallowing
+  "<", adjacent text-node merging, unmatched end tags and the HTML
+  implicit-close ancestor walk were all quadratic. The C scanner is quadratic
+  on the last two as well; on malformed input this release is 12-37x faster
+  than the extension it replaces.
+* Elements#at and its % alias work again. They referenced Fixnum, removed in
+  Ruby 3.2, and so raised NameError for every argument type.
+* Hpricot::DocType.new, Builder#doctype, #xhtml_transitional and #xhtml_strict
+  work again. The C node's attribute slot was nil when built from Ruby, so the
+  setters raised FrozenError.
+* Traverse#nodes_at no longer prints to stdout.
+* to_html no longer mutates frozen string literals.
+* String#fast_xs is reimplemented in Ruby, byte-for-byte identical to the C
+  version across all 256 single-byte inputs.
+
+Byte-identical round-tripping
+* Unterminated comments, CDATA sections and processing instructions keep their
+  source bytes. The C scanner dropped the opening delimiter of an unterminated
+  comment, so "<p>a</p><!-- never closed" came back four bytes short.
+* Unterminated attribute quotes round-trip; the C scanner prepended the tag
+  name to the resulting text node.
+
+Other
+* JRuby is supported by the same code. The separate Java scanner is gone.
+* CI covers every maintained Ruby (3.3, 3.4, 4.0) on Linux and macOS, and gates
+  on determinism, byte-identical round-tripping and sub-quadratic scaling.
+* setup.rb and the mswin32 cross-compile machinery are removed. The ragel
+  grammar is kept under docs/grammar/ as the specification the Ruby scanner was
+  ported from; the C implementation remains available at the tag
+  pre-pure-ruby-scanner.
+
 = 0.10.0
 === 24 March 2026
 * Fix compilation with Ruby 4.
