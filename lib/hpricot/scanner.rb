@@ -45,7 +45,11 @@ module Hpricot
         # ragel grammar matches literal uppercase DOCTYPE only, so
         # '<!doctype html>' is text. Verified against the C scanner.
       elsif (m = @ss.scan(%r{</([^\s>]*)\s*>?}))
-        Token.new(:etag, @ss[1], nil, nil, m, nil)
+        name = @ss[1]
+        # hpricot_scan.rl:317-324 downcases stag/emptytag/etag names alike in
+        # HTML mode (it is the same lookup used to find the tag's content
+        # model in ElementContent, whose keys are all lowercase).
+        Token.new(:etag, @xml ? name : name.downcase, nil, nil, m, nil)
       elsif @ss.check(/<[A-Za-z_:]/)
         tag(start)
       else
