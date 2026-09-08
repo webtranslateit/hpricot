@@ -26,6 +26,14 @@ module Hpricot
       doc = Doc.allocate
       doc.children = []
       @stack = [doc]
+      # Tracks the most recently added node under the CURRENT focus, so
+      # adjacent text tokens can be merged into one Text node instead of
+      # becoming siblings. Reset to nil whenever focus changes (an element is
+      # opened or a matching end tag closes one) -- see
+      # ext/hpricot_scan/hpricot_scan.rl:297,398,442,523. Any other node
+      # creation (text, comment, cdata, procins, doctype, xmldecl, an empty or
+      # bogus element) just becomes the new @last.
+      @last = nil
 
       @tokens.each { |tok| consume(tok) }
 
@@ -37,27 +45,52 @@ module Hpricot
     def add(node)
       node.parent = focus
       (focus.children ||= []) << node
+      @last = node
       node
     end
 
+    # Tokens that keep their own node type even while the focus is a raw-text
+    # element (<script>, <style>, ...): everything else collapses to text.
+    # Mirrors the gate in hpricot_scan.rl:322-333.
+    CDATA_PASSTHROUGH = %i[text comment cdata procins].freeze
+
     def consume(tok)
+      if !@xml && focus.is_a?(Elem) && focus.allowed == :CDATA && cdata_reinterprets?(tok)
+        return add_text(tok.raw)
+      end
+
       case tok.kind
-      when :text      then add(text_node(tok))
+      when :text      then add_text(tok.raw)
       when :comment   then add(simple(Comment, tok.content, tok.raw))
       when :cdata     then add(simple(CData, tok.content, tok.raw))
       when :procins   then add(procins(tok))
       when :xmldecl   then add(xmldecl(tok))
       when :doctype   then add(doctype(tok))
-      when :stag      then open_element(tok)
-      when :emptytag  then add(element(tok))
+      when :stag      then handle_stag(tok)
+      when :emptytag  then handle_emptytag(tok)
       when :etag      then close_element(tok)
       end
     end
 
-    def text_node(tok)
-      t = Text.allocate
-      t.content = tok.raw
-      t
+    def cdata_reinterprets?(tok)
+      return false if CDATA_PASSTHROUGH.include?(tok.kind)
+      return false if tok.kind == :etag && tok.name == focus.name
+
+      true
+    end
+
+    # Appends to the previous sibling if it is itself a Text node (matching
+    # ext/hpricot_scan/hpricot_scan.rl:470-476), otherwise starts a new one.
+    # This is what makes a stray '<' in running text ("a < b") one Text node
+    # instead of two.
+    def add_text(raw)
+      if @last.is_a?(Text)
+        @last.content = @last.content + raw
+      else
+        t = Text.allocate
+        t.content = raw
+        add(t)
+      end
     end
 
     def simple(klass, content, raw = nil)
@@ -109,11 +142,30 @@ module Hpricot
       e
     end
 
-    def open_element(tok)
+    # In HTML mode, a start tag whose content model is :EMPTY (e.g. <br>,
+    # <link>) never gets focused even without a trailing '/', and conversely
+    # a "<foo/>" spelling of a non-:EMPTY tag is just an ordinary start tag
+    # (the '/' is not honoured). Mirrors hpricot_scan.rl:335-340.
+    def handle_stag(tok)
       close_implied(tok.name) unless @xml
       e = add(element(tok))
-      e.children = []
-      @stack.push(e)
+      if @xml || e.allowed != :EMPTY
+        e.children = []
+        @stack.push(e)
+        @last = nil
+      end
+    end
+
+    def handle_emptytag(tok)
+      close_implied(tok.name) unless @xml
+      e = add(element(tok))
+      return if @xml
+
+      if e.allowed != :EMPTY
+        e.children = []
+        @stack.push(e)
+        @last = nil
+      end
     end
 
     def close_element(tok)
@@ -134,6 +186,7 @@ module Hpricot
 
       @stack[idx].etag = tok.raw
       @stack.pop(@stack.length - idx)
+      @last = nil
     end
 
     # HTML implicit closing.
