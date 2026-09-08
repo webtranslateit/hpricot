@@ -352,7 +352,8 @@ class TestNodes < Test::Unit::TestCase
   def test_bogus_etag_raw_string_is_the_raw_attributes_slot
     b = Hpricot::BogusETag.allocate
     b.name = 'div'
-    b.raw_string = '</div >'
+    # raw_string is a getter only in the C extension; assign via the slot.
+    b.raw_attributes = '</div >'
     assert_equal '</div >', b.raw_string
     b.clear_raw
     assert_nil b.raw_string
@@ -1069,7 +1070,10 @@ module Hpricot
         # than discarding them, which is required for byte-identical output.
         b = BogusETag.new
         b.name = tok.name
-        b.raw_string = tok.raw
+        # NOTE: the C extension defines BogusETag#raw_string as a GETTER only
+        # (rb_define_method(cBogusETag, "raw_string", hpricot_ele_get_attr, 0));
+        # there is no raw_string= setter. Assign through the slot itself.
+        b.raw_attributes = tok.raw
         add(b)
         return
       end
