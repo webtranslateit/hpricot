@@ -82,28 +82,56 @@ Measured on Ruby 4.0.6, arm64-darwin, parsing a real Android `strings.xml`
 fixture scaled up by repeating its `<string>` elements. `Hpricot::XML`, mean of
 several runs.
 
-| Input | C/ragel scanner | pure Ruby | ratio |
-|---|---|---|---|
-| 26 KB | 0.4 ms | 2.2 ms | 5.5x |
-| 186 KB | 4.2 ms | 22.5 ms | 5.4x |
-| 1.5 MB | 44.1 ms | 199.2 ms | 4.5x |
-| 5 MB | 181.4 ms | 667.6 ms | 3.7x |
+| Input | C/ragel scanner | pure Ruby | + YJIT | ratio (YJIT) |
+|---|---|---|---|---|
+| 26 KB | 0.4 ms | 2.3 ms | 1.7 ms | 4.3x |
+| 186 KB | 4.4 ms | 23.6 ms | 14.1 ms | 3.2x |
+| 1.5 MB | 46.9 ms | 210.9 ms | 130.3 ms | 2.8x |
+| 5 MB | 181.4 ms | 714.5 ms | 453.7 ms | 2.5x |
 
-Both are linear in input size; the ratio narrows on larger inputs because the
-per-token overhead amortises. The Ruby scanner is 4-5x slower in absolute terms,
-which was an accepted trade: parsing is under half the cost of even
-parse-plus-extract, before any encoding detection, entity decoding or database
-work, so it is not the bottleneck in any real pipeline. A 5 MB document — far
-above typical — parses in well under a second.
+Both are linear; the ratio narrows on larger inputs as per-token overhead
+amortises. YJIT is worth roughly 30% and needs no code change. Parsing is under
+half the cost of even parse-plus-extract, before encoding detection, entity
+decoding or database work, so it is not the bottleneck in any real pipeline.
 
-Scanning is ~80% of parse time and the tree build the remaining ~20%, so the
-scanner is where any further tuning belongs. Two things got it from an initial
-5-7x down to 4-5x, both by removing allocations rather than changing algorithms:
-dispatching on the first byte so a text token does not attempt four construct
-regexes first, and using `StringScanner#skip` in place of `#scan` wherever the
-matched text is discarded — `scan` allocates a String for the match even when
-the caller only needs to know it succeeded, which happened six times per tag.
-That took allocations from 6.3 to 4.8 per token.
+### Malformed input: faster than the C scanner
+
+The table above is well-formed input, where C wins. On malformed input the
+pure-Ruby scanner is now **considerably faster**, because several quadratic
+behaviours were fixed during the port that the C scanner still has:
+
+| Input | C/ragel scanner | pure Ruby |
+|---|---|---|
+| 97 KB of nested `<div>` | 1.73 s | 0.062 s |
+| 78 KB of `<a>` inside `<button>` | 1.58 s | 0.070 s |
+| 214 KB of unmatched end tags | 2.85 s | 0.077 s |
+
+These are not micro-optimisations: the same shapes were quadratic here too at
+various points during the port, at up to 77 seconds for 156 KB. Since this
+library parses untrusted uploads, an O(n²) input shape is a denial-of-service
+vector rather than a slow path, so `test/test_complexity.rb` asserts the
+scaling ratio for each of them and fails if any becomes quadratic again.
+
+### Where the time goes
+
+Scanning is ~80% of parse time and tree building ~20%, so the scanner is where
+tuning belongs. Two changes took the well-formed gap from 5-7x to 4-5x, both by
+removing allocations rather than changing algorithms: dispatching on the first
+byte so a text token does not attempt four construct regexes first, and using
+`StringScanner#skip` in place of `#scan` wherever the matched text is discarded
+— `scan` allocates a String for the match even when only its success matters,
+which happened six times per tag. Allocations fell from 6.3 to 4.8 per token.
+
+### Why this is viable now and was not in 2006
+
+Hpricot was written in 2006 against Ruby 1.8, a tree-walking interpreter with
+no bytecode VM. A pure-Ruby scanner then would have been perhaps an order of
+magnitude slower than this one, which is a large part of why the scanner was
+written in C to begin with. Ruby 1.9 brought YARV, 2.x brought generational and
+incremental GC, and 3.x brought YJIT. The trade-off that justified a C extension
+in 2006 simply does not hold in 2026: this scanner parses a 1.5 MB document in
+130 ms, which is comfortably faster in absolute terms than the original C
+extension managed on the hardware it was written for.
 
 ### "Pure Ruby" — what that does and does not mean
 

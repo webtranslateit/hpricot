@@ -26,6 +26,16 @@ module Hpricot
       doc = Doc.allocate
       doc.children = []
       @stack = [doc]
+      # How many Elem nodes are open for each tag name. close_element consults
+      # this before scanning the stack: an end tag matching nothing at all is
+      # the common case in malformed input, and scanning the whole stack for
+      # each one made that quadratic.
+      @open_counts = Hash.new(0)
+      # Per content-model key, the stack indices of currently-open elements
+      # carrying an :allow or :deny for it, outermost first. Naturally sorted:
+      # elements are pushed with increasing index and popped from the top.
+      # See OVERRIDING_KEYS and close_implied.
+      @override_indices = Hash.new { |h, k| h[k] = [] }
       # Tracks the most recently added node under the CURRENT focus, so
       # adjacent text tokens can be merged into one Text node instead of
       # becoming siblings. Reset to nil whenever focus changes (an element is
@@ -156,8 +166,7 @@ module Hpricot
       e = add(element(tok))
       if @xml || e.allowed != :EMPTY
         e.children = []
-        @stack.push(e)
-        @last = nil
+        push(e)
       end
     end
 
@@ -174,13 +183,51 @@ module Hpricot
       # focused, matching the "/" the author actually wrote.
       if !e.allowed.nil? && e.allowed != :EMPTY
         e.children = []
-        @stack.push(e)
-        @last = nil
+        push(e)
       end
     end
 
+    # Every stack mutation goes through push/pop_to so @open_counts cannot
+    # drift out of step with @stack.
+    # For each tag name, which content-model KEYS carry an :allow or :deny --
+    # the only entries that can override a match found at an inner ancestor.
+    # Only 10 of ElementContent's 89 tags have any, and each has a handful, so
+    # maintaining open counts per key is cheap and lets close_implied stop at
+    # the first match in every case except the one that genuinely needs the
+    # full walk.
+    OVERRIDING_KEYS = ElementContent.each_with_object({}) do |(name, model), h|
+      next unless model.is_a?(Hash)
+
+      keys = model.each_with_object([]) { |(k, v), a| a << k if v == :allow || v == :deny }
+      h[name] = keys unless keys.empty?
+    end.freeze
+
+    def push(elem)
+      @stack.push(elem)
+      @open_counts[elem.name] += 1
+      idx = @stack.length - 1
+      OVERRIDING_KEYS[elem.name]&.each { |k| @override_indices[k] << idx }
+      @last = nil
+    end
+
+    # Pops until the stack is +depth+ deep.
+    def pop_to(depth)
+      while @stack.length > depth
+        popped = @stack.pop
+        next unless popped.is_a?(Elem)
+
+        @open_counts[popped.name] -= 1
+        OVERRIDING_KEYS[popped.name]&.each { |k| @override_indices[k].pop }
+      end
+      @last = nil
+    end
+
     def close_element(tok)
-      idx = @stack.rindex { |n| n.is_a?(Elem) && n.name == tok.name }
+      # O(1) for an end tag with no matching open element, which is what
+      # malformed input is full of. Without this the rindex below scanned the
+      # entire open-element stack for every one of them: 352KB of
+      # "<x:a>"*n + "</zzz>"*n took 58 seconds.
+      idx = @open_counts[tok.name].zero? ? nil : @stack.rindex { |n| n.is_a?(Elem) && n.name == tok.name }
 
       if idx.nil?
         # No matching open tag: hpricot keeps the bytes as a BogusETag rather
@@ -196,8 +243,7 @@ module Hpricot
       end
 
       @stack[idx].etag = tok.raw
-      @stack.pop(@stack.length - idx)
-      @last = nil
+      pop_to(idx)
     end
 
     # HTML implicit closing.
@@ -258,31 +304,54 @@ module Hpricot
       return unless ElementContent.key?(new_name)
 
       key = new_name.hash
-      original_focus = focus
-      match = nil
-      e = original_focus
+      top = @stack.length - 1
 
-      while e.is_a?(Elem)
+      # The walk goes focus -> parent -> ... -> root, and @stack is exactly
+      # that chain with root at index 0, so the stack index is just the loop
+      # counter. Tracking it here removes a second full scan
+      # (@stack.index(match)) that used to run after the walk.
+      #
+      # An :allow or :deny is applied AFTER everything inner and overwrites it
+      # outright, so when any open element carries one for this key, the
+      # OUTERMOST such element decides the outcome and every ancestor between
+      # it and the focus is irrelevant. Jumping straight to it keeps this O(1)
+      # amortised instead of O(depth) per start tag. Without it, 78KB of
+      # "<button>" + "<a>x"*n took 19 seconds.
+      outermost = @override_indices[key].first
+
+      if outermost
+        match_idx = @stack[outermost].allowed[key] == :allow ? top : nil
+        i = outermost - 1
+      else
+        match_idx = nil
+        i = top
+      end
+
+      while i.positive? && (e = @stack[i]).is_a?(Elem)
         allowed = e.allowed
 
         if allowed.is_a?(Hash)
           case allowed[key]
-          when true   then match ||= e
-          when :allow then match = original_focus
-          when :deny  then match = nil
+          when true   then match_idx ||= i
+          when :allow then match_idx = top
+          when :deny  then match_idx = nil
           end
         else
           # No content model on this ancestor: treat it like an
           # unrecognised tag, which can contain anything.
-          match ||= e
+          match_idx ||= i
         end
 
-        e = e.parent
+        # Everything from here outwards carries no override for this key
+        # (the outermost one, if any, was applied above), so once a match is
+        # found nothing further out can change it.
+        break if match_idx
+
+        i -= 1
       end
 
-      match ||= original_focus
-      idx = @stack.index(match)
-      @stack.pop(@stack.length - 1 - idx) if idx
+      match_idx ||= top
+      pop_to(match_idx + 1)
     end
   end
 end
