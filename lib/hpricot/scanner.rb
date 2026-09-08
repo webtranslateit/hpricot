@@ -35,6 +35,11 @@ module Hpricot
       @scan_src = source.dup.force_encoding(Encoding::ASCII_8BIT)
       @ss = StringScanner.new(@scan_src)
 
+      # Lowest position from which no '>' (respectively ']') remains in the
+      # document. Both start unknown. See gt_ahead?.
+      @no_gt_from = nil
+      @no_rbracket_from = nil
+
       # Which encoding the token strings carry.
       #
       # A BINARY source carries no information about what its bytes mean --
@@ -143,7 +148,10 @@ module Hpricot
       #   StartXmlProcIns = "<?" Name space+
       # so "<?x?>" and "<?x>" are text, not processing instructions. Verified
       # against the C scanner.
-      return text_from(start) unless @scan_src.byteslice(body_start..) =~ /\A#{NAME_RE.source}\s/o
+      # check, not a byteslice of the remaining document: that copied the whole
+      # tail on every processing instruction.
+      return text_from(start) unless @ss.check(/#{NAME_RE.source}\s/o)
+      return text_from(start) unless gt_ahead?
 
       found = @ss.scan_until(/\??>/)
       return text_from(start) unless found
@@ -196,9 +204,13 @@ module Hpricot
     def doctype(start)
       return text_from(start) unless @ss.skip(/\s+#{NAME_RE.source}/o)
 
-      @ss.skip(/[^>\[]*/)          # external identifiers, if any
-      @ss.skip(/\[[^\]]*\]\s*/)     # internal subset, if any
-      return text_from(start) unless @ss.skip(/[^>]*>/)
+      # No terminator anywhere ahead: bail now rather than scanning to EOF and
+      # rewinding, which is what made this quadratic.
+      return text_from(start) unless gt_ahead?
+
+      @ss.skip(/[^>\[]*/)                                # external identifiers
+      @ss.skip(/\[[^\]]*\]\s*/) if rbracket_ahead?      # internal subset
+      return text_from(start) unless gt_ahead? && @ss.skip(/[^>]*>/)
 
       raw = span(start)
       Token.new(:doctype, nil, parse_doctype(raw), nil, raw, nil)
@@ -305,6 +317,38 @@ module Hpricot
       Token.new(empty ? :emptytag : :stag,
                 @xml ? name : downcase(name),
                 attrs, nil, span(start), empty)
+    end
+
+    # Is there a '>' at or after the scan position?
+    #
+    # doctype and procins scan forward for a terminator that may not exist. When
+    # it does not, the scan runs to EOF, text_from then rewinds to the
+    # construct's start, and text consumes only as far as the NEXT '<' -- so the
+    # whole tail is rescanned once per construct. That is quadratic: 1MB of
+    # '<!DOCTYPE h SYSTEM "' took 264 seconds.
+    #
+    # byteindex is a memchr, and the memo makes every call after the first "no"
+    # O(1). The memo records a POSITION rather than a boolean because
+    # "no '>' from here" is only sound for positions at or after that point;
+    # a bare flag is wrong, since the internal-subset skip can legitimately
+    # consume a '>' and leave later ones reachable. `<!DOCTYPE h [<?x >]` is the
+    # case that catches it -- the PI must survive.
+    def gt_ahead?
+      pos = @ss.pos
+      return false if @no_gt_from && pos >= @no_gt_from
+      return true if @scan_src.byteindex('>', pos)
+
+      @no_gt_from = pos
+      false
+    end
+
+    def rbracket_ahead?
+      pos = @ss.pos
+      return false if @no_rbracket_from && pos >= @no_rbracket_from
+      return true if @scan_src.byteindex(']', pos)
+
+      @no_rbracket_from = pos
+      false
     end
 
     # Rewinds to +start+ and re-reads the construct as text. Used when a tag
