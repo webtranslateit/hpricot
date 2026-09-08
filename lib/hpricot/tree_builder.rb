@@ -161,7 +161,13 @@ module Hpricot
       e = add(element(tok))
       return if @xml
 
-      if e.allowed != :EMPTY
+      # hpricot_scan.rl:335-340 only reclassifies "<foo/>" as an ordinary
+      # start tag (pushing it as a container) when foo has a KNOWN,
+      # non-:EMPTY content model. An unrecognised tag (e.allowed is nil --
+      # no ElementContent entry at all, e.g. a namespaced RSS/Atom element
+      # like <dc:creator/>) keeps its self-closed spelling and is never
+      # focused, matching the "/" the author actually wrote.
+      if !e.allowed.nil? && e.allowed != :EMPTY
         e.children = []
         @stack.push(e)
         @last = nil
