@@ -17,21 +17,27 @@ require 'hpricot'
 # the failures being guarded against are 10x-100x, not 2x.
 class TestComplexity < Test::Unit::TestCase
   # Doubling the input must not multiply the time by more than this. Linear is
-  # 2.0 and quadratic is 4.0; measured at these sizes the fixed code runs at
-  # ~1.9 and the quadratic version it replaced at ~3.5, so 2.8 separates them
-  # with margin on both sides.
-  MAX_RATIO = 2.8
+  # 2.0 and quadratic is 4.0. At these sizes the fixed code measures 1.91-2.19
+  # across the cases below and the quadratic versions it replaced measure 3.67,
+  # so 3.0 sits between them with roughly 30% margin on each side. Tighter than
+  # that is not worth it: this is a guard against 10x-100x regressions, and a
+  # threshold close to the linear measurement just makes the suite flaky.
+  MAX_RATIO = 3.0
 
-  # Chosen so the quadratic/linear gap is unambiguous while a passing run stays
-  # well under a second per case. Smaller inputs did not separate the two.
-  SMALL = 32_000
-  LARGE = 64_000
+  # Sizes matter for reliability, not just speed. At 32k/64k a loaded CI runner
+  # measured a linear case at 2.87 and failed this suite; the absolute times
+  # there (0.03s/0.07s) were small enough for scheduling noise to dominate.
+  # Doubling the sizes doubles the times and halves the relative noise.
+  SMALL = 64_000
+  LARGE = 128_000
+
+  # Best-of-N. The minimum is the sample least contaminated by other work on
+  # the machine, which is the failure mode being guarded against here.
+  SAMPLES = 3
 
   def assert_subquadratic(label, xml: false, &generate)
-    # Best of three at each size: a single sample is too noisy on a shared CI
-    # runner, and the minimum is the least contaminated by scheduling.
-    small = 3.times.map { time(generate.call(SMALL), xml: xml) }.min
-    large = 3.times.map { time(generate.call(LARGE), xml: xml) }.min
+    small = SAMPLES.times.map { time(generate.call(SMALL), xml: xml) }.min
+    large = SAMPLES.times.map { time(generate.call(LARGE), xml: xml) }.min
 
     # If even the large case is trivially fast, the ratio is measuring noise.
     return if large < 0.02
