@@ -45,13 +45,18 @@ module Hpricot
   # supported: it dereferenced a NULL state pointer on any tag carrying an
   # attribute, and had no callers.
   def self.scan(input, opts = {})
-    # Traverse#make passes the document's stored @options through, which is nil
-    # for a document that was built rather than parsed.
+    # Traverse#make passes the document's stored @options through, e.g. so a
+    # fragment inserted with Elem#after into an XML document is itself parsed
+    # in XML mode. hpricot_scan.rl:528 set this same ivar on the C scanner's
+    # document; without it, Doc#make (hpricot/tag.rb) always falls back to
+    # HTML-mode parsing for inserted fragments.
     opts ||= {}
     source = input.respond_to?(:read) ? input.read.to_s : input.to_s
     kw = { xml: !!opts[:xml],
            fixup_tags: !!opts[:fixup_tags],
            xhtml_strict: !!opts[:xhtml_strict] }
-    TreeBuilder.new(Scanner.new(source, **kw).tokens, **kw).document
+    doc = TreeBuilder.new(Scanner.new(source, **kw).tokens, **kw).document
+    doc.instance_variable_set(:@options, opts)
+    doc
   end
 end
