@@ -119,7 +119,15 @@ module Hpricot
     end
   end
 
+  # Like Comment and CData, ProcIns carries a raw_string the C extension did
+  # not have. Its #content holds only the text after the target, so preserve
+  # mode had to reconstruct "<?" + target + " " + content + "?>" -- which does
+  # not reproduce `<?x?>` (no space), `<?x>` (no `?` terminator), or any PI
+  # whose internal whitespace is not a single space, `<?php echo 1; ?>`
+  # included.
   class ProcIns < AttrNode
+    attr_accessor :raw_string
+
     alias target name
     alias target= name=
     alias content raw_attributes

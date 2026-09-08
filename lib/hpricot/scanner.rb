@@ -239,7 +239,14 @@ module Hpricot
                   # one trailing quote, so "class=xyz'" parses as "xyz" (a
                   # stray closing quote someone forgot to open).
                   v_start = @ss.pos
-                  @ss.skip(%r{[^\s>]*})
+                  # '<' is excluded, per hpricot_common.rl:23
+                  #   UnqAttr = ... [^ \t\r\n<>"'] ... [^ \t\r\n<>]*
+                  # Including it let the attribute loop run past every '<' to
+                  # EOF, at which point text_from rewound to the tag's start and
+                  # text() consumed only to the NEXT '<' -- so every subsequent
+                  # '<' rescanned the same tail. That is quadratic: 35KB of
+                  # "<a href=x" took 6s, and 1MB would have taken ~90 minutes.
+                  @ss.skip(%r{[^\s<>]*})
                   unq = span(v_start, @ss.pos - v_start)
                   unq = unq[0...-1] if unq.end_with?('"', "'")
                   # A completely empty, unquoted value (name= immediately
@@ -323,8 +330,9 @@ module Hpricot
       if (m = bin.match(/\A<!DOCTYPE\s+([^\s>]+)/i))
         attrs[:target] = raw.byteslice(m.begin(1), m[1].bytesize)
       end
-      if (m = bin.match(/PUBLIC\s+"([^"]*)"/i))
-        attrs[:public_id] = raw.byteslice(m.begin(1), m[1].bytesize)
+      if (m = bin.match(/PUBLIC\s+(?:"([^"]*)"|'([^']*)')/i))
+        g = m[1] ? 1 : 2
+        attrs[:public_id] = raw.byteslice(m.begin(g), m[g].bytesize)
       end
       # SYSTEM takes one literal; PUBLIC takes a public id then an OPTIONAL
       # system id. Verified against the C scanner:
@@ -335,11 +343,14 @@ module Hpricot
       # The previous pattern required SYSTEM to be followed immediately by a
       # quote, so `SYSTEM "url"` never matched at all.
       sys = if attrs.key?(:public_id)
-              bin.match(/PUBLIC\s+"[^"]*"\s+"([^"]*)"/i)
+              bin.match(/PUBLIC\s+(?:"[^"]*"|'[^']*')\s+(?:"([^"]*)"|'([^']*)')/i)
             else
-              bin.match(/SYSTEM\s+"([^"]*)"/i)
+              bin.match(/SYSTEM\s+(?:"([^"]*)"|'([^']*)')/i)
             end
-      attrs[:system_id] = raw.byteslice(sys.begin(1), sys[1].bytesize) if sys
+      if sys
+        g = sys[1] ? 1 : 2
+        attrs[:system_id] = raw.byteslice(sys.begin(g), sys[g].bytesize)
+      end
       attrs
     end
   end

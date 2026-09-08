@@ -43,8 +43,9 @@ class TestDifferential < Test::Unit::TestCase
     legacy = DifferentialHelper.legacy_parse(path, xml: xml)
 
     # The old scanner crashing is a known defect, not a reason to fail the
-    # port. Skip those inputs; test/test_robustness.rb asserts the new one
-    # does NOT crash on them.
+    # port. Skip those inputs; the new scanner's own robustness is
+    # covered by test/test_scanner.rb, which asserts it never raises across
+    # every truncated prefix of a document.
     omit("legacy scanner crashed on #{path}") if legacy == :crashed
     omit("legacy scanner raised on #{path}: #{legacy[1]}") if legacy.is_a?(Array)
 

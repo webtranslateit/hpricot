@@ -2,7 +2,9 @@
 #
 # All of Hpricot's various part are loaded when you use <tt>require 'hpricot'</tt>.
 #
-# * hpricot_scan: the scanner (a C extension for Ruby) which turns an HTML stream into tokens.
+# * hpricot/scanner.rb: turns an HTML/XML stream into tokens, each keeping its source bytes.
+# * hpricot/tree_builder.rb: assembles those tokens into a document tree.
+# * hpricot/nodes.rb: the node classes.
 # * hpricot/parse.rb: uses the scanner to sort through tokens and give you back a complete document object.
 # * hpricot/tag.rb: sets up objects for the various types of elements in an HTML document.
 # * hpricot/modules.rb: categorizes the various elements using mixins.

@@ -85,7 +85,11 @@ module Hpricot
     # instead of two.
     def add_text(raw)
       if @last.is_a?(Text)
-        @last.content = @last.content + raw
+        # Mutate in place. Rebuilding with + copied the whole accumulated
+        # text on every adjacent token, making "a < b" in ordinary prose
+        # quadratic: 1MB took 3.6s, and 1M bare '<' took 22s. `span` returns a
+        # fresh unshared byteslice, so appending to it is safe.
+        @last.content << raw
       else
         t = Text.allocate
         t.content = raw
@@ -104,6 +108,7 @@ module Hpricot
       p = ProcIns.allocate
       p.target = tok.name
       p.content = tok.content
+      p.raw_string = tok.raw
       p
     end
 

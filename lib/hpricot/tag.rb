@@ -201,7 +201,11 @@ module Hpricot
 
   class ProcIns
     def pathname; "procins()" end
-    def raw_string; output(+"") end
+
+    # The recorded span wins; reconstructing cannot reproduce a PI's original
+    # spacing or a missing `?` terminator. Falls back to output for a ProcIns
+    # built in Ruby rather than parsed.
+    def raw_string; @raw_string || output(+"") end
     def output(out, opts = {})
       out <<
         if_output(opts) do

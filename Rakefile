@@ -29,7 +29,13 @@ task :fidelity do
   $LOAD_PATH.unshift('lib')
   require 'hpricot'
   files = Dir['test/files/*'].select { |f| File.file?(f) }
-  bad = files.reject { |f| src = File.binread(f); Hpricot::XML(src).to_original_html == src }
+  # Compared as bytes: src comes from binread (ASCII-8BIT) while output
+  # carries the document's encoding, and String#== is false across
+  # incompatible encodings even when the bytes match.
+  bad = files.reject do |f|
+    src = File.binread(f)
+    Hpricot::XML(src).to_original_html.b == src.b
+  end
   abort "not byte-identical: #{bad.inspect}" unless bad.empty?
   puts "#{files.size} fixtures round-trip byte-identically"
 end

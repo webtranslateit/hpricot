@@ -1,22 +1,12 @@
-*.class
 *.o
 *.bundle
 *.so
-*.rbc
-mkmf.log
-conftest.dSYM
-lib/*.jar
-lib/hpricot_scan.rb
-lib/fast_xs.rb
-hpricot-*-java
-hpricot-*-mswin32
 pkg
 .DS_Store
 tmp
 Gemfile.lock
 *.gem
 *.dSYM/
-ext/**/Makefile
 *.tmp
 
 /test/corpus/*

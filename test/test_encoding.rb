@@ -47,7 +47,12 @@ class TestEncoding < Test::Unit::TestCase
   end
 
   def test_invalid_byte_sequence_does_not_raise
-    src = %(<r><s>café</s></r>).dup.force_encoding(Encoding::UTF_8)
+    # A lone \xE9 is not valid UTF-8. Written as an escape in a double-quoted
+    # string so the bytes really are invalid: the previous version of this test
+    # used a literal e-acute in a UTF-8 source file, so force_encoding(UTF_8)
+    # was a no-op and it asserted nothing about its subject.
+    src = "<r><s>caf\xE9</s></r>".dup.force_encoding(Encoding::UTF_8)
+    refute src.valid_encoding?, 'fixture must actually contain invalid bytes'
     assert_nothing_raised { Hpricot::XML(src) }
   end
 end

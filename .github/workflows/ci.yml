@@ -87,7 +87,10 @@ jobs:
             abort("no fixtures found") if files.empty?
             bad = files.reject { |f|
               src = File.binread(f)
-              Hpricot::XML(src).to_original_html == src
+              # Byte comparison: src is ASCII-8BIT from binread, output
+              # carries the document encoding, and String#== is false
+              # across incompatible encodings even for identical bytes.
+              Hpricot::XML(src).to_original_html.b == src.b
             }
             abort("not byte-identical: #{bad.inspect}") unless bad.empty?
             puts "#{files.size} fixtures round-trip byte-identically"'
