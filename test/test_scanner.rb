@@ -178,4 +178,26 @@ class TestScanner < Test::Unit::TestCase
     text_tok = toks.find { |t| t.kind == :text }
     assert_equal 'café … 日本語', text_tok.raw
   end
+
+  # All four DOCTYPE shapes, verified against the C scanner. The SYSTEM form
+  # regressed once because the pattern required SYSTEM to be followed
+  # immediately by a quote, which broke the JavaXml fixture's
+  # <!DOCTYPE properties SYSTEM "...">.
+  def test_doctype_external_identifiers
+    assert_equal({ target: 'html' },
+                 scan('<!DOCTYPE html>')[0].attrs)
+
+    assert_equal({ target: 'properties',
+                   system_id: 'http://java.sun.com/dtd/properties.dtd' },
+                 scan('<!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd">')[0].attrs)
+
+    assert_equal({ target: 'html', public_id: '-//W3C//DTD HTML 4.01//EN' },
+                 scan('<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">')[0].attrs)
+
+    assert_equal({ target: 'html',
+                   public_id: '-//W3C//DTD XHTML 1.0 Strict//EN',
+                   system_id: 'http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd' },
+                 scan('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" ' \
+                      '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">')[0].attrs)
+  end
 end

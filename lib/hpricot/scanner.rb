@@ -293,9 +293,20 @@ module Hpricot
       if (m = bin.match(/PUBLIC\s+"([^"]*)"/i))
         attrs[:public_id] = raw.byteslice(m.begin(1), m[1].bytesize)
       end
-      if (m = bin.match(/(?:SYSTEM|"\s+)"([^"]*)"\s*>?\z/i))
-        attrs[:system_id] = raw.byteslice(m.begin(1), m[1].bytesize)
-      end
+      # SYSTEM takes one literal; PUBLIC takes a public id then an OPTIONAL
+      # system id. Verified against the C scanner:
+      #   <!DOCTYPE html>                         -> target only
+      #   <!DOCTYPE n SYSTEM "s">                 -> target + system_id
+      #   <!DOCTYPE n PUBLIC "p">                 -> target + public_id
+      #   <!DOCTYPE n PUBLIC "p" "s">             -> target + public_id + system_id
+      # The previous pattern required SYSTEM to be followed immediately by a
+      # quote, so `SYSTEM "url"` never matched at all.
+      sys = if attrs.key?(:public_id)
+              bin.match(/PUBLIC\s+"[^"]*"\s+"([^"]*)"/i)
+            else
+              bin.match(/SYSTEM\s+"([^"]*)"/i)
+            end
+      attrs[:system_id] = raw.byteslice(sys.begin(1), sys[1].bytesize) if sys
       attrs
     end
   end
