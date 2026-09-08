@@ -109,6 +109,38 @@ module Hpricot
       Token.new(:text, nil, nil, nil, span(start), nil)
     end
 
+    def tag(start)
+      @ss.getch                       # consume '<'
+      name = @ss.scan(/[^\s\/>]+/).to_s
+      attrs = {}
+
+      loop do
+        @ss.scan(/\s+/)
+        break if @ss.eos? || @ss.check(/\/?>/)
+
+        key = @ss.scan(%r{[^\s=/><]+})
+        break if key.nil?
+
+        val = nil
+        if @ss.scan(/\s*=\s*/)
+          val = if (q = @ss.scan(/"[^"]*"|'[^']*'/))
+                  q[1...-1]
+                else
+                  @ss.scan(%r{[^\s>]*})
+                end
+        end
+        key = key.downcase unless @xml
+        attrs[key] = val
+      end
+
+      empty = !@ss.scan(%r{\s*/>}).nil?
+      @ss.scan(/\s*>/) unless empty
+
+      Token.new(empty ? :emptytag : :stag,
+                @xml ? name : name.downcase,
+                attrs, nil, span(start), empty)
+    end
+
     def span(start)
       @src.byteslice(start, @ss.pos - start)
     end

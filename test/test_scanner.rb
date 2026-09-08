@@ -61,4 +61,121 @@ class TestScanner < Test::Unit::TestCase
     toks = scan('<!-- never closed')
     assert_equal '<!-- never closed', toks.map(&:raw).join
   end
+
+  def test_start_tag_with_attributes
+    toks = scan('<div id="a" class=b>')
+    assert_equal :stag, toks[0].kind
+    assert_equal 'div', toks[0].name
+    assert_equal 'a', toks[0].attrs['id']
+    assert_equal 'b', toks[0].attrs['class']
+    assert_equal '<div id="a" class=b>', toks[0].raw
+  end
+
+  def test_empty_tag
+    toks = scan('<br />')
+    assert_equal :emptytag, toks[0].kind
+    assert_equal 'br', toks[0].name
+  end
+
+  def test_end_tag
+    toks = scan('</div>')
+    assert_equal :etag, toks[0].kind
+    assert_equal 'div', toks[0].name
+  end
+
+  # Attribute values are stored undecoded — this is the fidelity requirement
+  # from language_file_handler#691.
+  def test_entities_in_attribute_values_are_not_decoded
+    toks = scan('<a title="a&#8230;b&quot;c">')
+    assert_equal 'a&#8230;b&quot;c', toks[0].attrs['title']
+  end
+
+  def test_attribute_names_downcased_in_html_mode_only
+    assert_equal 'x', scan('<a HREF="x">')[0].attrs['href']
+    assert_equal 'x', scan('<a HREF="x">', xml: true)[0].attrs['HREF']
+  end
+
+  def test_unterminated_tag_does_not_raise
+    src = '<div id="a"'
+    assert_equal src, scan(src).map(&:raw).join
+  end
+
+  def test_full_document_reassembles_exactly
+    src = %(<?xml version="1.0"?>\n<r a="1">\n  <s>x&#8230;</s>\n</r>\n)
+    assert_equal src, scan(src, xml: true).map(&:raw).join
+  end
+
+  # --- Byte-fidelity property test -------------------------------------
+  #
+  # The single invariant the whole port exists to preserve: every byte of
+  # the input appears in exactly one token's raw span, for ANY input,
+  # however malformed.
+  REASSEMBLY_INPUTS = [
+    '',
+    '<',
+    '<<<',
+    '<a',
+    '<a b',
+    '<a b=',
+    '<a b="',
+    '<a b=c d>',
+    '</',
+    '</>',
+    '<!--',
+    '<!-- unterminated',
+    '<!-- has -- inside -->',
+    '<!--nested<!--comment-->tail',
+    '<![CDATA[',
+    '<![CDATA[unterminated',
+    '<![CDATA[x]]y]]>',
+    '<?',
+    '<?xml',
+    '<?xml version="1.0"?>',
+    '<!',
+    '<!DOCTYPE',
+    '<!DOCTYPE html',
+    '<a></b></a>',
+    '&#99999999999;',
+    "\x00<a>",
+    '<a title="a&#8230;b&quot;c">',
+    "<p>café … 日本語</p>",
+    'plain text, no markup at all',
+    '<><><>',
+    "<a\nb\n=\n'c'\n>",
+    '<!--comment--><tag>text</tag><!DOCTYPE x>'
+  ].freeze
+
+  def test_reassembly_invariant_over_varied_and_malformed_inputs
+    REASSEMBLY_INPUTS.each do |src|
+      [{}, { xml: true }].each do |opts|
+        toks = scan(src, **opts)
+        joined = toks.map(&:raw).join
+        assert_equal src, joined,
+                     "reassembly failed for #{src.inspect} (opts=#{opts.inspect})"
+      end
+    end
+  end
+
+  # --- No-raise property test -------------------------------------------
+  #
+  # The scanner must never raise, on any input, including every truncated
+  # prefix of a realistic document.
+  def test_never_raises_on_truncated_prefixes_of_a_real_document
+    src = File.binread(File.expand_path('files/basic.xhtml', __dir__))
+    (0..src.bytesize).each do |i|
+      prefix = src.byteslice(0, i)
+      assert_nothing_raised("raised on prefix of length #{i}") do
+        scan(prefix)
+      end
+    end
+  end
+
+  # --- UTF-8 fidelity -----------------------------------------------------
+  def test_utf8_content_reassembles_exactly_using_byte_offsets
+    src = '<p>café … 日本語</p>'
+    toks = scan(src)
+    assert_equal src, toks.map(&:raw).join
+    text_tok = toks.find { |t| t.kind == :text }
+    assert_equal 'café … 日本語', text_tok.raw
+  end
 end
