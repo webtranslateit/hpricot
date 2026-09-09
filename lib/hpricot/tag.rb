@@ -72,6 +72,25 @@ module Hpricot
   end
 
   class Elem
+    # Content models that mean "this element takes no children".
+    #
+    # :EMPTY is HTML mode's marker, from ElementContent. :VOID is the html_void
+    # option's marker -- same nesting behaviour, but serialized the way the
+    # source wrote it rather than always with an XHTML self-closing slash.
+    VOID_MODELS = [:EMPTY, :VOID].freeze
+
+    # True for an html_void element whose source had no self-closing slash.
+    #
+    # These elements sit inside translatable text, so rewriting '<br>' as
+    # '<br />' would change the string a translator sees and invalidate
+    # existing translations -- and rewriting '<hr />' as '<hr>' would equally
+    # modify a document that was self-closing to begin with. Neither
+    # normalisation is acceptable, so the source spelling decides. An element
+    # built in Ruby rather than parsed has no raw_string and keeps the default.
+    def void_written_bare?
+      allowed == :VOID && !raw_string.nil? && !raw_string.end_with?('/>')
+    end
+
     def initialize tag, attrs = nil, children = nil, etag = nil
       self.name, self.raw_attributes, self.children, self.etag =
         tag, attrs, children, etag
@@ -98,7 +117,7 @@ module Hpricot
       out <<
         if_output(opts) do
           "<#{name}#{attributes_as_html}" +
-            ((empty? and not etag) ? " /" : "") +
+            ((empty? and not etag and not void_written_bare?) ? " /" : "") +
             ">"
         end
       if children
@@ -106,7 +125,12 @@ module Hpricot
       end
       if opts[:preserve]
         out << etag if etag
-      elsif etag or !empty?
+      elsif (etag or !empty?) and not VOID_MODELS.include?(allowed)
+        # A void element never gets an end tag. `allowed` is :EMPTY only for
+        # HTML's void elements -- always in HTML mode, and in XML mode when the
+        # caller passed :html_void -- so this is a no-op for an ordinary XML
+        # document, where a <br> element is just an element and must keep its
+        # </br>.
         out << "</#{name}>"
       end
       out
