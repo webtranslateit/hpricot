@@ -82,40 +82,55 @@ module Hpricot
 
     private
 
-    LT = 0x3C # '<'
+    LT       = 0x3C # '<'
+    BANG     = 0x21 # '!'
+    QUESTION = 0x3F # '?'
+    SLASH    = 0x2F # '/'
 
     def next_token
       start = @ss.pos
 
-      # Fast path: a token that does not begin with '<' can only be text, so
-      # skip the four construct probes below. Most tokens in a real document
-      # are text, and getbyte avoids allocating to find that out.
+      # A token that does not begin with '<' can only be text. getbyte finds
+      # that out without allocating, and most tokens in a real document are
+      # text.
       return text(start) unless @scan_src.getbyte(start) == LT
 
-      # skip rather than scan throughout: the matched text is discarded here,
-      # and scan would allocate a String for it every time.
-      if @ss.skip(/<!--/)      then comment(start)
-      elsif @ss.skip(/<!\[CDATA\[/) then cdata(start)
-      elsif @ss.skip(/<\?/)    then procins(start)
-      elsif @ss.skip(/<!DOCTYPE/) then doctype(start) # case-sensitive: the
-        # ragel grammar matches literal uppercase DOCTYPE only, so
-        # '<!doctype html>' is text. Verified against the C scanner.
-      elsif (m = @ss.scan(%r{</(#{NAME_RE.source})\s*>}o))
-        # hpricot_common.rl:32: EndTag = "</" NameCap space* ">". Both a valid
-        # Name and the closing '>' are required; "</>", "</ >" and an
-        # unterminated "</x" are text, as they are to the C scanner. Accepting
-        # them produced a BogusETag, and BogusETag#output emits nothing, so
-        # to_html silently dropped those bytes.
-        name = span(start + 2, @ss[1].bytesize)
-        # hpricot_scan.rl:317-324 downcases stag/emptytag/etag names alike in
-        # HTML mode (it is the same lookup used to find the tag's content
-        # model in ElementContent, whose keys are all lowercase).
-        Token.new(:etag, @xml ? name : downcase(name), nil, nil, span(start), nil)
-      elsif @ss.check(/<[A-Za-z_:]/)
-        tag(start)
+      # Dispatch on the SECOND byte rather than trying each construct in turn.
+      # A start tag is the commonest '<' token, and it used to pay four failed
+      # regex attempts plus a check before reaching `tag`. One byte removes all
+      # of that: worth ~15% on a real document, and it is pure interpreter work
+      # removed -- allocation counts are unchanged.
+      case @scan_src.getbyte(start + 1)
+      when BANG                      # comment, CDATA section or doctype
+        if @ss.skip(/<!--/)          then comment(start)
+        elsif @ss.skip(/<!\[CDATA\[/) then cdata(start)
+        # Case-sensitive: hpricot_common.rl:45 matches literal uppercase
+        # DOCTYPE only, so '<!doctype html>' is text.
+        elsif @ss.skip(/<!DOCTYPE/)  then doctype(start)
+        else text(start)
+        end
+      when QUESTION                  # processing instruction or XML declaration
+        @ss.skip(/<\?/) ? procins(start) : text(start)
+      when SLASH                     # end tag
+        etag(start)
       else
-        text(start)
+        @ss.check(/<[A-Za-z_:]/) ? tag(start) : text(start)
       end
+    end
+
+    # hpricot_common.rl:32: EndTag = "</" NameCap space* ">". Both a valid Name
+    # and the closing '>' are required; "</>", "</ >" and an unterminated "</x"
+    # are text, as they are to the C scanner. Accepting them produced a
+    # BogusETag, whose #output emits nothing, so to_html silently dropped those
+    # bytes.
+    def etag(start)
+      return text(start) unless @ss.scan(%r{</(#{NAME_RE.source})\s*>}o)
+
+      # hpricot_scan.rl:317-324 downcases stag/emptytag/etag names alike in HTML
+      # mode: it is the same lookup used to find the tag's content model in
+      # ElementContent, whose keys are all lowercase.
+      name = span(start + 2, @ss[1].bytesize)
+      Token.new(:etag, @xml ? name : downcase(name), nil, nil, span(start), nil)
     end
 
     def comment(start)
