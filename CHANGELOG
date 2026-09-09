@@ -1,4 +1,8 @@
-= Unreleased
+= 1.0.0
+=== 9 September 2026
+
+This release replaces the C extension with pure Ruby. No native code is
+compiled at install time and ragel is no longer needed to build or contribute.
 
 * Added an :html_void parse option. XML has no void elements, so parsing HTML
   through Hpricot::XML opened <br> as a container and everything after it became
@@ -16,12 +20,6 @@
   form. Without the option a <br> element remains an ordinary element, which
   matters because XLIFF, DocBook and Android string resources contain them
   legitimately and dropping the end tag would produce unbalanced output.
-
-= 1.0.0
-=== 8 September 2026
-
-This release replaces the C extension with pure Ruby. No native code is
-compiled at install time and ragel is no longer needed to build or contribute.
 
 Breaking changes
 * Requires Ruby >= 3.3. Ruby 3.2 reached end of life on 31 March 2026.
