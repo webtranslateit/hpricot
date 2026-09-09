@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name = 'webtranslateit-hpricot'
-  s.version = '1.0.0'
+  s.version = '1.0.1'
 
   s.authors = ['why the lucky stiff', 'WebTranslateIt']
   s.email = 'support@webtranslateit.com'
