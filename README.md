@@ -84,12 +84,12 @@ several runs.
 
 | Input | C/ragel scanner | pure Ruby | + YJIT | ratio (YJIT) |
 |---|---|---|---|---|
-| 26 KB | 0.4 ms | 2.3 ms | 1.8 ms | 4.5x |
-| 186 KB | 4.3 ms | 22.8 ms | 15.7 ms | 3.7x |
-| 1.5 MB | 45.4 ms | 190.6 ms | 151.3 ms | 3.3x |
-| 5 MB | 153.2 ms | 716.5 ms | 554.4 ms | 3.6x |
+| 26 KB | 0.4 ms | 1.9 ms | 1.4 ms | 3.5x |
+| 186 KB | 4.2 ms | 18.7 ms | 11.8 ms | 2.8x |
+| 1.5 MB | 44.2 ms | 176.0 ms | 119.1 ms | 2.7x |
+| 5 MB | 191.8 ms | 623.2 ms | 377.5 ms | 2.0x |
 
-Both are linear. YJIT is worth roughly 25-30% and needs no code change. Parsing
+Both are linear. YJIT is worth roughly 30-40% and needs no code change. Parsing
 is under half the cost of even parse-plus-extract, before encoding detection,
 entity decoding or database work, so it is not the bottleneck in any real
 pipeline.
@@ -102,9 +102,9 @@ behaviours were fixed during the port that the C scanner still has:
 
 | Input | C/ragel scanner | pure Ruby |
 |---|---|---|
-| 97 KB of nested `<div>` | 1.73 s | 0.062 s |
-| 78 KB of `<a>` inside `<button>` | 1.58 s | 0.070 s |
-| 214 KB of unmatched end tags | 2.85 s | 0.077 s |
+| 97 KB of nested `<div>` | 1.54 s | **0.047 s** |
+| 78 KB of `<a>` inside `<button>` | 1.59 s | **0.065 s** |
+| 214 KB of unmatched end tags | 2.47 s | **0.052 s** |
 
 These are not micro-optimisations: the same shapes were quadratic here too at
 various points during the port, at up to 77 seconds for 156 KB. Since this
@@ -119,27 +119,33 @@ puts GC at 22% of samples (13.9% sweeping, 7.7% marking) and `String#byteslice`
 at another 10%, so allocation pressure dominates and that is where tuning has
 to aim.
 
-What worked:
+What worked, in order of size:
 
-* Dispatching on the first byte, so a text token does not attempt four
-  construct regexes before falling through.
+* Dispatching on the second byte of a `<` token rather than trying each
+  construct in turn. A start tag is the commonest `<` token and used to pay four
+  failed regex attempts before reaching the tag parser (−14%).
+* Matching a whole attribute in one scan rather than six `StringScanner` calls,
+  using the capture groups directly instead of separate byteslices (−5%).
 * `StringScanner#skip` instead of `#scan` wherever the matched text is
-  discarded — `scan` allocates a String for the match even when only its
-  success matters.
-* Matching a whole attribute in one scan rather than six calls, using the
-  capture groups directly instead of separate byteslices (~5%).
+  discarded — `scan` allocates a String for the match even when only its success
+  matters, which happened six times per tag.
+* Dispatching on the first byte so a text token does not attempt the construct
+  regexes at all.
 * Not copying the document. A source already valid in an ASCII-compatible
   encoding is scanned in place: `StringScanner#pos` and `#skip` are
   byte-oriented whatever the encoding, and the character classes here are all
-  ASCII-only. This removes two full-document copies per parse — the scanning
-  buffer and a re-encoded copy for slicing — so a 5 MB upload no longer
-  allocates 10 MB of copies. Peak RSS is dominated by the parse tree, so this
+  ASCII-only. This removes the per-parse copies — two for a BINARY source (the
+  scanning buffer plus a re-encoded copy to slice from), one for a source
+  carrying a declared encoding. `File.binread` and `Zip::File#read` both give
+  BINARY, so the two-copy case is the common one, and a 5 MB upload stops
+  allocating 10 MB of copies. Peak RSS is dominated by the parse tree, so this
   does not show up there; it is an allocation win, not a footprint one.
 
 What did not work, measured and reverted: interning repeated tag names and
 attribute keys. `string` and `name` recur thousands of times in a translation
 file, but the lookup still allocates the temporary it searches with, so the
-allocation count was unchanged and the hash probe cost as much as it saved.
+allocation count was unchanged (795,627 against 795,626) and the hash probe cost
+as much as it saved.
 
 ### Why this is viable now and was not in 2006
 
@@ -149,7 +155,7 @@ magnitude slower than this one, which is a large part of why the scanner was
 written in C to begin with. Ruby 1.9 brought YARV, 2.x brought generational and
 incremental GC, and 3.x brought YJIT. The trade-off that justified a C extension
 in 2006 simply does not hold in 2026: this scanner parses a 1.5 MB document in
-130 ms, which is comfortably faster in absolute terms than the original C
+119 ms, which is comfortably faster in absolute terms than the original C
 extension managed on the hardware it was written for.
 
 ### "Pure Ruby" — what that does and does not mean
