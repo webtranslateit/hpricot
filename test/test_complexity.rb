@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'test/unit'
+require 'timeout'
 $LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
 require 'hpricot'
 
@@ -77,6 +78,41 @@ class TestComplexity < Test::Unit::TestCase
       Process::CLOCK_MONOTONIC
     end
 
+  # For shapes where linear and quadratic are separated by ~1000x rather than
+  # 2x, an absolute bound is the right tool and a ratio is the wrong one. At
+  # 32,000 repetitions the fixed scanner takes ~0.03s and the quadratic version
+  # it replaced took ~90s, so a generous timeout separates them unambiguously
+  # and cannot be perturbed by a loaded runner.
+  #
+  # A ratio at these sizes measured 0.012s against 0.038s on a CI macOS box and
+  # failed as "quadratic" on code that is linear -- absolute times that small
+  # make the ratio meaningless.
+  ABSOLUTE_N = 32_000
+  ABSOLUTE_TIMEOUT = 5 # seconds; ~150x the observed linear cost
+
+  # Two cases override ABSOLUTE_N. The processing-instruction quadratic was
+  # milder than the doctype one, so 32,000 repetitions still finished inside the
+  # timeout on the broken code and the test passed when it should not have;
+  # 128,000 does not. Verified by running against the pre-fix scanner.
+
+  def assert_parses_without_blowing_up(label, xml: false, n: ABSOLUTE_N)
+    src = yield n
+
+    # The timeout bounds how long a failure takes to detect; the assertion is
+    # what makes this a test. Without it a passing run records no assertion at
+    # all, which is indistinguishable from a test that silently did nothing.
+    elapsed = Timeout.timeout(ABSOLUTE_TIMEOUT) { time(src, xml: xml) }
+
+    assert_operator elapsed, :<, ABSOLUTE_TIMEOUT,
+                    "#{label}: #{n} repetitions took " \
+                    "#{format('%.2f', elapsed)}s; the linear implementation " \
+                    'takes about 0.03s'
+  rescue Timeout::Error
+    flunk "#{label}: #{n} repetitions did not parse within " \
+          "#{ABSOLUTE_TIMEOUT}s, so it is not linear " \
+          '(the linear implementation takes about 0.03s)'
+  end
+
   def time(src, xml:)
     started = Process.clock_gettime(CLOCK)
     xml ? Hpricot::XML(src) : Hpricot.parse(src)
@@ -128,25 +164,25 @@ class TestComplexity < Test::Unit::TestCase
   # 1MB of the first took 264 seconds -- and shipped precisely because this
   # file guarded only attribute, text and tree-builder shapes.
   def test_doctype_without_a_terminator_is_linear
-    assert_subquadratic('doctype, no terminator', xml: true, small: 8_000, large: 16_000) { |n| '<!DOCTYPE h SYSTEM "' * n }
+    assert_parses_without_blowing_up('doctype, no terminator', xml: true) { |n| '<!DOCTYPE h SYSTEM "' * n }
   end
 
   def test_doctype_with_an_unclosed_internal_subset_is_linear
-    assert_subquadratic('doctype, unclosed subset', xml: true, small: 8_000, large: 16_000) { |n| '<!DOCTYPE h [' * n }
+    assert_parses_without_blowing_up('doctype, unclosed subset', xml: true) { |n| '<!DOCTYPE h [' * n }
   end
 
   # This one parses successfully, so it is not only the failure path that was
   # affected.
   def test_doctype_with_a_subset_and_a_terminator_is_linear
-    assert_subquadratic('doctype, subset + >', xml: true, small: 8_000, large: 16_000) { |n| '<!DOCTYPE h [>' * n }
+    assert_parses_without_blowing_up('doctype, subset + >', xml: true) { |n| '<!DOCTYPE h [>' * n }
   end
 
   def test_unterminated_processing_instruction_is_linear
-    assert_subquadratic('unterminated PI', xml: true, small: 8_000, large: 16_000) { |n| '<?x ' * n }
+    assert_parses_without_blowing_up('unterminated PI', xml: true, n: 128_000) { |n| '<?x ' * n }
   end
 
   # The shape a truncated PHP upload takes.
   def test_unterminated_php_instruction_is_linear
-    assert_subquadratic('unterminated <?php', xml: true, small: 8_000, large: 16_000) { |n| '<?php ' * n }
+    assert_parses_without_blowing_up('unterminated <?php', xml: true, n: 128_000) { |n| '<?php ' * n }
   end
 end
