@@ -1,3 +1,22 @@
+= Unreleased
+
+* Added an :html_void parse option. XML has no void elements, so parsing HTML
+  through Hpricot::XML opened <br> as a container and everything after it became
+  its children -- "<p>one<br>two</p>" put "two" inside the <br>, and to_html
+  emitted a "</br>" that was never in the source. With html_void: true the
+  twelve HTML void elements (area, base, basefont, br, col, hr, img, input,
+  isindex, link, meta, param) take no children and get no end tag, while the
+  rest of XML parsing is unchanged.
+
+  The set is derived from ElementContent rather than hardcoded, so it cannot
+  drift from what HTML mode already does.
+
+  A void element is serialized the way the source wrote it: "<br>" stays "<br>"
+  and "<hr />" stays "<hr />". HTML mode is untouched and still writes the XHTML
+  form. Without the option a <br> element remains an ordinary element, which
+  matters because XLIFF, DocBook and Android string resources contain them
+  legitimately and dropping the end tag would produce unbalanced output.
+
 = 1.0.0
 === 8 September 2026
 

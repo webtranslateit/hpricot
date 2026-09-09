@@ -56,7 +56,8 @@ module Hpricot
     source = input.respond_to?(:read) ? input.read.to_s : input.to_s
     kw = { xml: !!opts[:xml],
            fixup_tags: !!opts[:fixup_tags],
-           xhtml_strict: !!opts[:xhtml_strict] }
+           xhtml_strict: !!opts[:xhtml_strict],
+           html_void: !!opts[:html_void] }
     doc = TreeBuilder.new(Scanner.new(source, **kw).tokens, **kw).document
     doc.instance_variable_set(:@options, opts)
     doc

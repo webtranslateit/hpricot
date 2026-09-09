@@ -17,10 +17,13 @@ module Hpricot
   #   * Every byte of the input appears in exactly one token's `raw`.
   #   * Attribute values are stored undecoded.
   class Scanner
-    def initialize(source, xml: false, fixup_tags: false, xhtml_strict: false)
+    def initialize(source, xml: false, fixup_tags: false, xhtml_strict: false, html_void: false)
       @xml = xml
       @fixup_tags = fixup_tags
       @xhtml_strict = xhtml_strict
+      # Consumed by TreeBuilder; accepted here so Hpricot.scan can pass one
+      # option hash to both.
+      @html_void = html_void
 
       # Lowest position from which no '>' (respectively ']') remains in the
       # document. Both start unknown. See gt_ahead?.

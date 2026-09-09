@@ -9,9 +9,10 @@ module Hpricot
   # implicit closing driven by ElementContent (see #close_implied), matching
   # ext/hpricot_scan/hpricot_scan.rl:316-400.
   class TreeBuilder
-    def initialize(tokens, xml: false, fixup_tags: false, xhtml_strict: false)
+    def initialize(tokens, xml: false, fixup_tags: false, xhtml_strict: false, html_void: false)
       @tokens = tokens
       @xml = xml
+      @html_void = html_void
       @fixup_tags = fixup_tags
       @xhtml_strict = xhtml_strict
     end
@@ -158,7 +159,22 @@ module Hpricot
       e.raw_attributes = tok.attrs.empty? ? nil : tok.attrs
       e.raw_string = tok.raw
       e.tagno = tok.name.hash
-      e.allowed = ElementContent[tok.name] unless @xml
+
+      if @xml
+        # XML has no void elements, so nothing is marked :EMPTY and <br> is an
+        # ordinary container. html_void opts into HTML's list while leaving the
+        # rest of XML parsing alone -- for callers who are parsing HTML through
+        # Hpricot::XML and want <br> to behave like <br>. See VOID_TAGS.
+        # :VOID rather than :EMPTY, so the serializer can tell the two apart.
+        # Both mean "takes no children"; only :EMPTY also means "write it the
+        # XHTML way, with a self-closing slash". HTML mode keeps :EMPTY and so
+        # keeps emitting '<br />'; html_void writes '<br>' as the source did,
+        # which matters when the element sits inside translatable text.
+        e.allowed = :VOID if @html_void && VOID_TAGS[tok.name]
+      else
+        e.allowed = ElementContent[tok.name]
+      end
+
       e
     end
 
@@ -169,7 +185,10 @@ module Hpricot
     def handle_stag(tok)
       close_implied(tok.name) unless @xml
       e = add(element(tok))
-      if @xml || e.allowed != :EMPTY
+      # Not `@xml || ...`: under html_void a void element is marked in XML mode
+      # too, and must not be focused. Plain XML mode is unaffected, since
+      # nothing is marked there.
+      unless Elem::VOID_MODELS.include?(e.allowed)
         e.children = []
         push(e)
       end
@@ -194,6 +213,12 @@ module Hpricot
 
     # Every stack mutation goes through push/pop_to so @open_counts cannot
     # drift out of step with @stack.
+    # HTML's void elements, taken from ElementContent so this cannot drift from
+    # what HTML mode already does: br, img, hr, input, meta, link and the rest.
+    VOID_TAGS = ElementContent.each_with_object({}) do |(name, model), h|
+      h[name] = true if model == :EMPTY
+    end.freeze
+
     # For each tag name, which content-model KEYS carry an :allow or :deny --
     # the only entries that can override a match found at an inner ancestor.
     # Only 10 of ElementContent's 89 tags have any, and each has a handful, so
