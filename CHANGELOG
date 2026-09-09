@@ -1,3 +1,21 @@
+= 1.0.1
+=== 9 September 2026
+
+* Added a :void_elements parse option, naming which tag names are void instead
+  of taking HTML's whole list the way :html_void does. Void-ness belongs to the
+  document type rather than to the tag name: an XML vocabulary is free to reuse
+  a name HTML treats as void and mean a container by it. TYPO3's locallang XML
+  has a <meta> holding <type> and <description>, and html_void: true drops both
+  its children and its end tag. void_elements: %w[br] gives such a document the
+  one tag it needs and leaves every other name an ordinary element.
+
+  The set is matched exactly, since XML is case sensitive and this option is for
+  XML mode. A String or Symbol is accepted as a one-element set. An explicit
+  empty list means no element is void, and an explicit set overrides
+  :html_void, so a caller can narrow the list without restating it as a
+  negation. Serialization is unchanged: a void element is still written the way
+  the source wrote it, and HTML mode is untouched.
+
 = 1.0.0
 === 9 September 2026
 

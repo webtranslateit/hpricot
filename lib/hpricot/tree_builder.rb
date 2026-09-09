@@ -9,10 +9,15 @@ module Hpricot
   # implicit closing driven by ElementContent (see #close_implied), matching
   # ext/hpricot_scan/hpricot_scan.rl:316-400.
   class TreeBuilder
-    def initialize(tokens, xml: false, fixup_tags: false, xhtml_strict: false, html_void: false)
+    def initialize(tokens, xml: false, fixup_tags: false, xhtml_strict: false, html_void: false,
+                   void_elements: nil)
       @tokens = tokens
       @xml = xml
-      @html_void = html_void
+      # Which tag names are void in XML mode, or nil for none (ordinary XML).
+      # :void_elements names the set outright; :html_void is shorthand for
+      # HTML's own list. An explicit set wins, so a caller can narrow the list
+      # without restating it as a negation.
+      @void_tags = void_elements || (html_void ? VOID_TAGS : nil)
       @fixup_tags = fixup_tags
       @xhtml_strict = xhtml_strict
     end
@@ -170,7 +175,15 @@ module Hpricot
         # XHTML way, with a self-closing slash". HTML mode keeps :EMPTY and so
         # keeps emitting '<br />'; html_void writes '<br>' as the source did,
         # which matters when the element sits inside translatable text.
-        e.allowed = :VOID if @html_void && VOID_TAGS[tok.name]
+        #
+        # void_elements names the set instead of taking HTML's whole list,
+        # because void-ness belongs to the document type rather than to the tag
+        # name. An XML vocabulary is free to reuse a name HTML happens to treat
+        # as void and mean a container by it -- TYPO3's locallang XML has a
+        # <meta> holding <type> and <description> -- and applying HTML's list
+        # there drops the children and the end tag. Such a caller asks for the
+        # one or two names it actually needs, typically %w[br].
+        e.allowed = :VOID if @void_tags&.key?(tok.name)
       else
         e.allowed = ElementContent[tok.name]
       end

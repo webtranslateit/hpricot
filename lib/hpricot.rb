@@ -57,9 +57,26 @@ module Hpricot
     kw = { xml: !!opts[:xml],
            fixup_tags: !!opts[:fixup_tags],
            xhtml_strict: !!opts[:xhtml_strict],
-           html_void: !!opts[:html_void] }
+           html_void: !!opts[:html_void],
+           void_elements: void_element_set(opts[:void_elements]) }
     doc = TreeBuilder.new(Scanner.new(source, **kw).tokens, **kw).document
     doc.instance_variable_set(:@options, opts)
     doc
   end
+
+  # Normalises the :void_elements option into a name => true lookup.
+  #
+  # nil means the option was not given, and TreeBuilder falls back to
+  # :html_void. An explicit empty list is a different statement -- "no element
+  # is void" -- so it normalises to an empty Hash, which is truthy and
+  # therefore overrides :html_void the way any other explicit set does.
+  #
+  # Names are matched exactly. XML is case sensitive, and this option exists
+  # for XML mode, so a set naming 'br' does not cover '<BR>'.
+  def self.void_element_set(names)
+    return nil if names.nil?
+
+    Array(names).each_with_object({}) { |name, set| set[name.to_s] = true }.freeze
+  end
+  private_class_method :void_element_set
 end
