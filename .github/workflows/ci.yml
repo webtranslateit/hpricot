@@ -103,10 +103,31 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+
+      # The JRuby that setup-ruby installs is compiled for a newer JDK than the
+      # runner's default, and without this the job failed before running any
+      # Ruby at all:
+      #
+      #   LinkageError ... org/jruby/main/Main has been compiled by a more
+      #   recent version of the Java Runtime (class file version 65.0), this
+      #   version of the Java Runtime only recognizes class file versions up
+      #   to 61.0
+      #
+      # 65.0 is Java 21. Pinning the JDK here means this leg actually exercises
+      # the library rather than failing in its own setup.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: jruby
           bundler-cache: true
+
+      - name: Report what is actually running
+        run: ruby -v
+
       - run: |
           ruby -Ilib -Itest -e 'Dir["test/test_*.rb"]
             .reject { |f| f.include?("differential") }
