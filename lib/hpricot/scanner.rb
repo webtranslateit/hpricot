@@ -183,9 +183,11 @@ module Hpricot
 
       term_len = @ss.matched.bytesize
       body_end = @ss.pos - term_len
-      # Find target/rest boundaries against the binary buffer (safe
-      # regardless of the source's declared encoding), then slice by byte offset so
-      # the resulting strings carry the output encoding.
+      # Find the target/rest boundary against the scanning buffer, then slice
+      # by byte offset so the result carries the output encoding. Note the
+      # buffer is only a separate BINARY copy when the source was invalid for
+      # its declared encoding; in the common path it IS the source, and these
+      # slice boundaries are character boundaries either way.
       bin_body = @scan_src.byteslice(body_start, body_end - body_start)
       target_len = bin_body[/\A\S*/].bytesize
       remainder = bin_body.byteslice(target_len..)
@@ -249,10 +251,6 @@ module Hpricot
       Token.new(:text, nil, nil, nil, span(start), nil)
     end
 
-    # Attribute names. Note that quotes are excluded: `<div "bare">` is not a
-    # tag with an attribute called `"bare"`, it is text (verified against the C
-    # scanner), and neither is `<div =foo>`.
-    ATTR_NAME_RE = %r{[^\s=/><"']+}
 
     # One attribute in a single scan: leading whitespace, the name, and
     # optionally '=' with a value in any of its three forms.
