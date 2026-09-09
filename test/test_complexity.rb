@@ -59,15 +59,28 @@ class TestComplexity < Test::Unit::TestCase
   # Monotonic clock rather than Benchmark.realtime: benchmark stopped being a
   # default gem in Ruby 4.0, so requiring it fails under bundle exec unless it
   # is declared as a dependency, and a timing helper is not worth one.
-  # CPU time, not wall clock. `min` over samples does not rescue a wall-clock
-  # measurement when the two sizes see different contention -- on a loaded
-  # machine a linear case measured a 3.82 ratio, a failure, because the small
-  # side happened to get an uncontended slot. Under the same load CPU time gave
-  # 2.37, restoring the margin this file assumes.
+  # CPU time where available, wall clock otherwise.
+  #
+  # `min` over samples does not rescue a wall-clock measurement when the two
+  # sizes see different contention -- on a loaded machine a linear case measured
+  # a 3.82 ratio, a failure, because the small side happened to get an
+  # uncontended slot. Under the same load CPU time gave 2.37.
+  #
+  # JRuby does not define CLOCK_PROCESS_CPUTIME_ID, so it falls back to
+  # CLOCK_MONOTONIC and is correspondingly more exposed to a loaded runner.
+  # That is acceptable: the JRuby leg is continue-on-error, and the gating legs
+  # all have the CPU clock.
+  CLOCK =
+    if Process.const_defined?(:CLOCK_PROCESS_CPUTIME_ID)
+      Process::CLOCK_PROCESS_CPUTIME_ID
+    else
+      Process::CLOCK_MONOTONIC
+    end
+
   def time(src, xml:)
-    started = Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID)
+    started = Process.clock_gettime(CLOCK)
     xml ? Hpricot::XML(src) : Hpricot.parse(src)
-    Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) - started
+    Process.clock_gettime(CLOCK) - started
   end
 
   # Unquoted attribute values must not swallow '<'. When they did, the
