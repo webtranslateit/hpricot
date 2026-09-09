@@ -97,8 +97,13 @@ module Hpricot
       if @last.is_a?(Text)
         # Mutate in place. Rebuilding with + copied the whole accumulated
         # text on every adjacent token, making "a < b" in ordinary prose
-        # quadratic: 1MB took 3.6s, and 1M bare '<' took 22s. `span` returns a
-        # fresh unshared byteslice, so appending to it is safe.
+        # quadratic: 1MB took 3.6s, and 1M bare '<' took 22s.
+        #
+        # Appending is safe, but NOT because the slice is unshared -- Ruby
+        # shares tail substrings, and ObjectSpace.memsize_of on a 1000-byte
+        # byteslice reports 40. It is safe because that sharing is
+        # copy-on-write: the first append gives the slice its own buffer and
+        # leaves the source untouched.
         @last.content << raw
       else
         t = Text.allocate

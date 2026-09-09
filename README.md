@@ -131,10 +131,13 @@ What worked:
 * Not copying the document. A source already valid in an ASCII-compatible
   encoding is scanned in place: `StringScanner#pos` and `#skip` are
   byte-oriented whatever the encoding, and the character classes here are all
-  ASCII-only. This removes two full-document copies per parse — the scanning
-  buffer and a re-encoded copy for slicing — so a 5 MB upload no longer
-  allocates 10 MB of copies. Peak RSS is dominated by the parse tree, so this
-  does not show up there; it is an allocation win, not a footprint one.
+  ASCII-only. This removes the copies that used to be made per parse — two for
+  a BINARY source (the scanning buffer, plus a re-encoded copy to slice from),
+  one for a source carrying a declared encoding. `File.binread` and
+  `Zip::File#read` both give BINARY, so the two-copy case is the common one in
+  practice, and a 5 MB upload stops allocating 10 MB of copies. Peak RSS is
+  dominated by the parse tree, so this does not show up there; it is an
+  allocation win, not a footprint one.
 
 What did not work, measured and reverted: interning repeated tag names and
 attribute keys. `string` and `name` recur thousands of times in a translation
