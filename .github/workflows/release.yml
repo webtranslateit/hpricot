@@ -1,0 +1,103 @@
+name: Release
+
+# Merging a version bump publishes the gem. When hpricot.gemspec changes on master and its
+# version is not on rubygems.org yet, this workflow pushes it there, then
+# creates the GitHub release and tag from the version's CHANGELOG entry. A change that keeps
+# the version (a dependency bump, say) finds it already published and tagged, and stops without
+# failing. Every gem in webtranslateit and Trackberry releases this way.
+#
+# There is no API key anywhere. RubyGems trusted publishing signs for the gem, and it trusts
+# this workflow in this repository and nothing else.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "hpricot.gemspec"
+  # Publishes the version at the chosen ref, e.g. to retry a release whose run failed.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: rubygems
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+
+      - name: Read the version
+        id: version
+        run: echo "value=$(ruby -e 'print Gem::Specification.load("hpricot.gemspec").version')" >> "$GITHUB_OUTPUT"
+
+      # A version number can never be pushed twice, so a published one is skipped.
+      - name: Check whether this version is already published
+        id: published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if curl -sf "https://rubygems.org/api/v2/rubygems/webtranslateit-hpricot/versions/${VERSION}.json" > /dev/null; then
+            echo "webtranslateit-hpricot ${VERSION} is already on rubygems.org."
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check whether this version is already tagged
+        id: tagged
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" > /dev/null; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The notes are the version's changelog entry, so the release page and the changelog
+      # cannot drift apart. A missing entry fails here, before anything is published.
+      - name: Extract the release notes
+        if: steps.tagged.outputs.value == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          ruby -e '
+            version = ENV.fetch("VERSION")
+            lines = File.readlines("CHANGELOG")
+            start = lines.index { |l| l.match?(/^(#+|=+) .*(?<![\w.])#{Regexp.escape(version)}(?![\w.])/) }
+            abort "No CHANGELOG entry for #{version}" unless start
+            marker = lines[start][/^(#+|=+)/]
+            stop = lines[(start + 1)..].index { |l| l.start_with?("#{marker} ") }
+            body = lines[(start + 1)...(stop ? start + 1 + stop : lines.size)]
+            File.write("release_notes.md", body.join.strip + "\n")
+          '
+
+      # Exchanges this run's OIDC token for a short-lived rubygems.org push key.
+      - if: steps.published.outputs.value == 'false'
+        uses: rubygems/configure-rubygems-credentials@v2.1.0
+
+      - name: Push to rubygems.org
+        if: steps.published.outputs.value == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          gem build hpricot.gemspec
+          gem push "webtranslateit-hpricot-${VERSION}.gem"
+
+      # Tags carry no "v", like the earlier ones.
+      - name: Create the GitHub release
+        if: steps.tagged.outputs.value == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: gh release create "${VERSION}" --target "${GITHUB_SHA}" --title "${VERSION}" --notes-file release_notes.md
